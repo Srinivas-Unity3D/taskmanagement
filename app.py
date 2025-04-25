@@ -48,7 +48,7 @@ connected_users = {}
 @socketio.on('connect')
 def handle_connect():
     logger.info(f"Client connected: {request.sid}")
-    emit('connect_response', {'status': 'connected', 'sid': request.sid})
+    socketio.emit('connect_response', {'status': 'connected', 'sid': request.sid}, room=request.sid)
 
 @socketio.on('disconnect')
 def handle_disconnect():
@@ -63,7 +63,7 @@ def handle_disconnect():
 def handle_register(username):
     connected_users[username] = request.sid
     logger.info(f"User registered: {username} ({request.sid})")
-    emit('register_response', {'status': 'registered', 'username': username})
+    socketio.emit('register_response', {'status': 'registered', 'username': username}, room=request.sid)
 
 def notify_task_update(task_data, event_type='task_update'):
     """Notify relevant users about task updates"""
@@ -77,7 +77,7 @@ def notify_task_update(task_data, event_type='task_update'):
         # Notify the assigned user
         if assigned_to in connected_users:
             logger.info(f"Sending notification to assigned user: {assigned_to}")
-            emit('task_notification', {
+            socketio.emit('task_notification', {
                 'type': event_type,
                 'task': task_data
             }, room=connected_users[assigned_to])
@@ -87,14 +87,14 @@ def notify_task_update(task_data, event_type='task_update'):
         # Notify the assigner if different from assignee
         if assigned_by and assigned_by != assigned_to and assigned_by in connected_users:
             logger.info(f"Sending notification to assigner: {assigned_by}")
-            emit('task_notification', {
+            socketio.emit('task_notification', {
                 'type': event_type,
                 'task': task_data
             }, room=connected_users[assigned_by])
 
         # Broadcast dashboard update to all connected users
         logger.info("Broadcasting dashboard update to all users")
-        emit('dashboard_update', {
+        socketio.emit('dashboard_update', {
             'type': event_type,
             'task': task_data
         }, broadcast=True)
@@ -102,6 +102,7 @@ def notify_task_update(task_data, event_type='task_update'):
         logger.info("Notification sent successfully")
     except Exception as e:
         logger.error(f"Error in notify_task_update: {e}")
+        logger.exception("Full traceback:")
 
 # Create database tables if they don't exist
 def init_db():
