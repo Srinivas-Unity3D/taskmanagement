@@ -5,10 +5,10 @@ Wants=mysql.service
 
 [Service]
 User=root
-WorkingDirectory=/root/TaskManagement_Backend
-Environment="PATH=/root/TaskManagement_Backend/venv/bin"
-EnvironmentFile=/root/TaskManagement_Backend/.env
-ExecStart=/root/TaskManagement_Backend/venv/bin/gunicorn --config gunicorn_config.py wsgi:app
+WorkingDirectory=/var/task_management/taskmanagement
+Environment="PATH=/var/task_management/taskmanagement/venv/bin"
+EnvironmentFile=/var/task_management/taskmanagement/.env
+ExecStart=/var/task_management/taskmanagement/venv/bin/gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:5000 wsgi:app
 Restart=always
 RestartSec=5
 StartLimitInterval=0
