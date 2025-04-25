@@ -674,33 +674,59 @@ def get_audio_note(task_id):
 @app.route('/tasks/assignments/<user_id>', methods=['GET'])
 def get_task_assignments(user_id):
     try:
-        cursor = mysql.connector.connect(**db_config).cursor(dictionary=True)
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor(dictionary=True)
         
-        # Get tasks where the user is either the assigner or assignee
-        query = """
+        # First get the user's role
+        cursor.execute("SELECT role FROM users WHERE user_id = %s", (user_id,))
+        user = cursor.fetchone()
+        
+        if not user:
+            return jsonify({
+                'success': False,
+                'message': 'User not found'
+            }), 404
+            
+        user_role = user['role'].lower()
+        
+        # Base query with all fields
+        base_query = """
             SELECT 
-                t.id,
+                t.task_id,
                 t.title as task_name,
                 t.description,
                 t.deadline as due_date,
                 t.priority,
-                t.current_task,
-                assigner.id as assigner_id,
+                t.status as current_task,
+                assigner.user_id as assigner_id,
                 assigner.username as assigner_name,
                 assigner.role as assigner_role,
-                assignee.id as assignee_id,
+                assignee.user_id as assignee_id,
                 assignee.username as assignee_name,
                 assignee.role as assignee_role
             FROM tasks t
-            JOIN users assigner ON t.assigned_by = assigner.id
-            JOIN users assignee ON t.assigned_to = assignee.id
-            WHERE assigner.id = %s OR assignee.id = %s
-            ORDER BY t.created_at DESC
+            JOIN users assigner ON t.assigned_by = assigner.username
+            JOIN users assignee ON t.assigned_to = assignee.username
         """
         
-        cursor.execute(query, (user_id, user_id))
+        # If user is admin or super admin, show all tasks
+        if user_role in ['admin', 'super admin']:
+            query = base_query + " ORDER BY t.created_at DESC"
+            cursor.execute(query)
+        else:
+            # For regular users, only show tasks where they are assigner or assignee
+            query = base_query + """
+                WHERE assigner.user_id = %s OR assignee.user_id = %s
+                ORDER BY t.created_at DESC
+            """
+            cursor.execute(query, (user_id, user_id))
+        
         assignments = cursor.fetchall()
-        cursor.close()
+        
+        # Format dates for JSON serialization
+        for assignment in assignments:
+            if assignment['due_date']:
+                assignment['due_date'] = assignment['due_date'].isoformat()
         
         return jsonify({
             'success': True,
@@ -708,10 +734,16 @@ def get_task_assignments(user_id):
         })
         
     except Exception as e:
+        logger.error(f"Error in get_task_assignments: {str(e)}")
         return jsonify({
             'success': False,
             'message': str(e)
         }), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 # ---------------- MAIN ----------------
 if __name__ == '__main__':
