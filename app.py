@@ -256,26 +256,46 @@ def create_task():
         priority = data['priority'].lower()
         status = data.get('status', 'pending').lower()
 
-        # Optional alarm settings
-        alarm_settings = data.get('alarm_settings', {})
+        # Initialize alarm fields as None
         start_date = None
         start_time = None
         frequency = None
-        
-        if alarm_settings:
+
+        # Handle alarm settings if present
+        alarm_settings = data.get('alarm_settings')
+        if alarm_settings and isinstance(alarm_settings, dict):
             try:
-                if alarm_settings.get('start_date'):
-                    # Parse ISO format date to MySQL date format
-                    start_date = datetime.fromisoformat(alarm_settings['start_date'].replace('Z', '')).date()
-                if alarm_settings.get('start_time'):
-                    # Parse time string to MySQL time format
-                    start_time = alarm_settings['start_time']
-                frequency = alarm_settings.get('frequency')
-            except ValueError as e:
-                logger.error(f"Error parsing date/time: {e}")
+                # Only process if both start_date and start_time are present
+                if 'start_date' in alarm_settings and 'start_time' in alarm_settings:
+                    start_date_str = alarm_settings['start_date']
+                    start_time_str = alarm_settings['start_time']
+                    
+                    # Parse and validate the date
+                    try:
+                        start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
+                    except ValueError as e:
+                        return jsonify({
+                            'success': False,
+                            'message': f'Invalid date format. Expected YYYY-MM-DD, got: {start_date_str}'
+                        }), 400
+
+                    # Parse and validate the time
+                    try:
+                        # This will raise ValueError if format is incorrect
+                        datetime.strptime(start_time_str, '%H:%M:%S')
+                        start_time = start_time_str
+                    except ValueError as e:
+                        return jsonify({
+                            'success': False,
+                            'message': f'Invalid time format. Expected HH:MM:SS, got: {start_time_str}'
+                        }), 400
+
+                    frequency = alarm_settings.get('frequency')
+            except Exception as e:
+                logger.error(f"Error processing alarm settings: {e}")
                 return jsonify({
                     'success': False,
-                    'message': f"Invalid date/time format: {str(e)}"
+                    'message': f'Error processing alarm settings: {str(e)}'
                 }), 400
 
         # Validate priority
