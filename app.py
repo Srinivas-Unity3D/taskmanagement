@@ -94,7 +94,33 @@ def init_db():
             conn.close()
 
 # Initialize database on startup
+def update_tasks_table():
+    try:
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor()
+
+        # Add new columns if they don't exist
+        try:
+            cursor.execute("""
+                ALTER TABLE tasks
+                ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            """)
+            conn.commit()
+            logger.info("Successfully updated tasks table schema")
+        except Exception as e:
+            logger.error(f"Error updating tasks table: {str(e)}")
+            
+    except Exception as e:
+        logger.error(f"Database connection error: {str(e)}")
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
 init_db()
+update_tasks_table()
 
 @app.route('/')
 def home():
@@ -293,8 +319,8 @@ def get_tasks():
                 t.status,
                 t.assigned_by,
                 t.assigned_to,
-                t.created_at,
-                t.updated_at,
+                COALESCE(t.created_at, CURRENT_TIMESTAMP) as created_at,
+                COALESCE(t.updated_at, CURRENT_TIMESTAMP) as updated_at,
                 GROUP_CONCAT(DISTINCT 
                     CASE 
                         WHEN a.attachment_id IS NOT NULL 
