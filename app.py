@@ -274,6 +274,8 @@ def get_tasks():
         username = request.args.get('username')
         role = request.args.get('role')
 
+        logger.debug(f"Fetching tasks for username: {username}, role: {role}")
+
         if not username or not role:
             return jsonify({'error': 'Missing username or role parameters'}), 400
 
@@ -282,7 +284,7 @@ def get_tasks():
 
         # Base query with joins to get audio notes and attachments
         base_query = """
-            SELECT 
+            SELECT DISTINCT
                 t.task_id,
                 t.title,
                 t.description,
@@ -291,23 +293,33 @@ def get_tasks():
                 t.status,
                 t.assigned_by,
                 t.assigned_to,
-                GROUP_CONCAT(DISTINCT a.attachment_id) as attachment_ids,
-                GROUP_CONCAT(DISTINCT a.file_name) as file_names,
-                an.audio_id
+                t.created_at,
+                t.updated_at,
+                GROUP_CONCAT(DISTINCT 
+                    CASE 
+                        WHEN a.attachment_id IS NOT NULL 
+                        THEN JSON_OBJECT('attachment_id', a.attachment_id, 'file_name', a.file_name)
+                        ELSE NULL 
+                    END
+                ) as attachments,
+                MAX(CASE WHEN an.audio_id IS NOT NULL THEN 1 ELSE 0 END) as has_audio
             FROM tasks t
             LEFT JOIN task_attachments a ON t.task_id = a.task_id
             LEFT JOIN task_audio_notes an ON t.task_id = an.task_id
         """
 
         # Add role-based filtering
-        if role in ['Admin', 'Super Admin']:
-            query = f"{base_query} GROUP BY t.task_id ORDER BY t.deadline ASC"
+        if role.lower() in ['admin', 'super admin']:
+            query = f"{base_query} GROUP BY t.task_id, t.title, t.description, t.deadline, t.priority, t.status, t.assigned_by, t.assigned_to, t.created_at, t.updated_at ORDER BY t.deadline ASC"
+            logger.debug("Executing admin query")
             cursor.execute(query)
         else:
-            query = f"{base_query} WHERE t.assigned_to = %s OR t.assigned_by = %s GROUP BY t.task_id ORDER BY t.deadline ASC"
+            query = f"{base_query} WHERE t.assigned_to = %s OR t.assigned_by = %s GROUP BY t.task_id, t.title, t.description, t.deadline, t.priority, t.status, t.assigned_by, t.assigned_to, t.created_at, t.updated_at ORDER BY t.deadline ASC"
+            logger.debug(f"Executing user query for {username}")
             cursor.execute(query, (username, username))
 
         tasks = cursor.fetchall()
+        logger.debug(f"Found {len(tasks)} tasks")
 
         # Format response
         formatted_tasks = []
@@ -316,34 +328,51 @@ def get_tasks():
                 'task_id': task['task_id'],
                 'title': task['title'],
                 'description': task['description'],
-                'deadline': task['deadline'].strftime('%Y-%m-%d') if task['deadline'] else None,
+                'deadline': task['deadline'].strftime('%Y-%m-%d %H:%M:%S') if task['deadline'] else None,
                 'priority': task['priority'],
                 'status': task['status'],
                 'assigned_by': task['assigned_by'],
                 'assigned_to': task['assigned_to'],
-                'has_audio': bool(task['audio_id']),
+                'created_at': task['created_at'].strftime('%Y-%m-%d %H:%M:%S') if task['created_at'] else None,
+                'updated_at': task['updated_at'].strftime('%Y-%m-%d %H:%M:%S') if task['updated_at'] else None,
+                'has_audio': bool(task['has_audio']),
                 'attachments': []
             }
 
-            # Add attachment info if present
-            if task['attachment_ids']:
-                attachment_ids = task['attachment_ids'].split(',')
-                file_names = task['file_names'].split(',')
-                formatted_task['attachments'] = [
-                    {'attachment_id': aid, 'file_name': fname}
-                    for aid, fname in zip(attachment_ids, file_names)
-                ]
+            # Parse attachments if present
+            if task['attachments']:
+                try:
+                    # Split the concatenated JSON strings and parse each one
+                    attachment_strings = task['attachments'].split(',')
+                    formatted_task['attachments'] = [
+                        eval(attachment_str) for attachment_str in attachment_strings
+                        if attachment_str != 'NULL' and attachment_str.strip()
+                    ]
+                except Exception as e:
+                    logger.error(f"Error parsing attachments for task {task['task_id']}: {str(e)}")
+                    formatted_task['attachments'] = []
 
             formatted_tasks.append(formatted_task)
 
-        return jsonify(formatted_tasks), 200
+        return jsonify({
+            'success': True,
+            'tasks': formatted_tasks
+        }), 200
 
     except mysql.connector.Error as err:
-        logger.error(f"Database error: {err}")
-        return jsonify({'error': 'Database error', 'details': str(err)}), 500
+        logger.error(f"Database error in get_tasks: {err}")
+        return jsonify({
+            'success': False,
+            'error': 'Database error',
+            'message': str(err)
+        }), 500
     except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-        return jsonify({'error': 'Server error', 'details': str(e)}), 500
+        logger.error(f"Unexpected error in get_tasks: {e}")
+        return jsonify({
+            'success': False,
+            'error': 'Server error',
+            'message': str(e)
+        }), 500
     finally:
         if cursor:
             cursor.close()
