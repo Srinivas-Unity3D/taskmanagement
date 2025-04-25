@@ -334,7 +334,7 @@ def get_tasks():
         logger.debug(f"Fetching tasks for username: {username}, role: {role}")
 
         if not username or not role:
-            return jsonify({'success': False, 'error': 'Missing username or role parameters'}), 400
+            return jsonify([]), 400  # Return empty list on error
 
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor(dictionary=True)
@@ -457,26 +457,15 @@ def get_tasks():
                 }
                 formatted_tasks.append(formatted_task)
 
-            return jsonify({
-                'success': True,
-                'tasks': formatted_tasks
-            }), 200
+            return jsonify(formatted_tasks), 200
 
         except mysql.connector.Error as db_err:
             logger.error(f"Database error in get_tasks: {db_err}")
-            return jsonify({
-                'success': False,
-                'error': 'Database error',
-                'message': str(db_err)
-            }), 500
+            return jsonify([]), 500  # Return empty list on error
 
     except Exception as e:
         logger.error(f"Unexpected error in get_tasks: {e}")
-        return jsonify({
-            'success': False,
-            'error': 'Server error',
-            'message': str(e)
-        }), 500
+        return jsonify([]), 500  # Return empty list on error
     finally:
         if cursor:
             cursor.close()
