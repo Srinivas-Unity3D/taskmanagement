@@ -47,42 +47,61 @@ connected_users = {}
 
 @socketio.on('connect')
 def handle_connect():
-    print(f"Client connected: {request.sid}")
-    emit('connect_response', {'status': 'connected'})
+    logger.info(f"Client connected: {request.sid}")
+    emit('connect_response', {'status': 'connected', 'sid': request.sid})
 
 @socketio.on('disconnect')
 def handle_disconnect():
     user = next((username for username, sid in connected_users.items() if sid == request.sid), None)
     if user:
         del connected_users[user]
-        print(f"Client disconnected: {user} ({request.sid})")
+        logger.info(f"Client disconnected: {user} ({request.sid})")
     else:
-        print(f"Unknown client disconnected: {request.sid}")
+        logger.info(f"Unknown client disconnected: {request.sid}")
 
 @socketio.on('register')
 def handle_register(username):
     connected_users[username] = request.sid
-    print(f"User registered: {username} ({request.sid})")
+    logger.info(f"User registered: {username} ({request.sid})")
     emit('register_response', {'status': 'registered', 'username': username})
 
 def notify_task_update(task_data, event_type='task_update'):
     """Notify relevant users about task updates"""
     try:
-        # Notify the assigned user
+        logger.info(f"Notifying task update - Type: {event_type}, Task: {task_data}")
+        
+        # Get the assigned user's socket ID
         assigned_to = task_data.get('assigned_to')
+        assigned_by = task_data.get('assigned_by')
+        
+        # Notify the assigned user
         if assigned_to in connected_users:
+            logger.info(f"Sending notification to assigned user: {assigned_to}")
             emit('task_notification', {
                 'type': event_type,
                 'task': task_data
             }, room=connected_users[assigned_to])
+        else:
+            logger.info(f"Assigned user not connected: {assigned_to}")
+
+        # Notify the assigner if different from assignee
+        if assigned_by and assigned_by != assigned_to and assigned_by in connected_users:
+            logger.info(f"Sending notification to assigner: {assigned_by}")
+            emit('task_notification', {
+                'type': event_type,
+                'task': task_data
+            }, room=connected_users[assigned_by])
 
         # Broadcast dashboard update to all connected users
+        logger.info("Broadcasting dashboard update to all users")
         emit('dashboard_update', {
             'type': event_type,
             'task': task_data
         }, broadcast=True)
+        
+        logger.info("Notification sent successfully")
     except Exception as e:
-        print(f"Error in notify_task_update: {e}")
+        logger.error(f"Error in notify_task_update: {e}")
 
 # Create database tables if they don't exist
 def init_db():
