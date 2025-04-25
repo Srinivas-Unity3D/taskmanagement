@@ -1,4 +1,4 @@
-Flask==3.1.0
+Flask==3.0.0
 flask-cors==5.0.1
 mysql-connector-python==9.3.0
 gunicorn==21.2.0
@@ -15,5 +15,4 @@ python-magic==0.4.27
 Flask-Session==0.5.0
 redis==5.0.1
 cryptography==42.0.5
-flask-socketio
-eventlet
+eventlet==0.35.2
