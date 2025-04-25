@@ -745,6 +745,93 @@ def get_task_assignments(user_id):
         if conn:
             conn.close()
 
+# ---------------- UPDATE TASK ----------------
+@app.route('/tasks/<task_id>', methods=['PUT'])
+def update_task(task_id):
+    try:
+        data = request.get_json()
+        
+        # Extract task data
+        priority = data.get('priority')
+        status = data.get('status')
+        deadline = data.get('deadline')
+        alarm_settings = data.get('alarm_settings')
+        
+        # Update task in database
+        cursor = mysql.connector.connect(**db_config).cursor()
+        
+        # Start with base update query
+        update_query = """
+            UPDATE tasks 
+            SET priority = %s,
+                status = %s,
+                deadline = %s
+        """
+        params = [priority, status, deadline]
+
+        # Add alarm settings if provided
+        if alarm_settings:
+            update_query += """,
+                start_date = %s,
+                start_time = %s,
+                frequency = %s
+            """
+            params.extend([
+                alarm_settings.get('start_date'),
+                alarm_settings.get('start_time'),
+                alarm_settings.get('frequency')
+            ])
+        
+        # Complete the query
+        update_query += " WHERE task_id = %s"
+        params.append(task_id)
+
+        # Execute update
+        cursor.execute(update_query, params)
+        
+        # Handle attachments if provided
+        if 'attachments' in data and data['attachments']:
+            for attachment_data in data['attachments']:
+                cursor.execute("""
+                    INSERT INTO task_attachments (task_id, file_name, file_data, file_type, file_size, created_by)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, (
+                    task_id,
+                    attachment_data['file_name'],
+                    attachment_data['file_data'],
+                    attachment_data['file_type'],
+                    attachment_data['file_size'],
+                    data.get('updated_by')
+                ))
+
+        # Handle voice note if provided
+        if 'audio_note' in data and data['audio_note']:
+            audio_data = data['audio_note']
+            cursor.execute("""
+                INSERT INTO task_audio_notes (task_id, audio_data, duration, created_by)
+                VALUES (%s, %s, %s, %s)
+            """, (
+                task_id,
+                audio_data['audio_data'],
+                audio_data.get('duration', 0),
+                data.get('updated_by')
+            ))
+
+        mysql.connector.connect(**db_config).commit()
+        cursor.close()
+
+        return jsonify({
+            'success': True,
+            'message': 'Task updated successfully'
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error updating task: {e}")
+        return jsonify({
+            'success': False,
+            'message': f'Failed to update task: {str(e)}'
+        }), 500
+
 # ---------------- MAIN ----------------
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True) 
