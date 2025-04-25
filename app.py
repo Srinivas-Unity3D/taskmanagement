@@ -670,6 +670,49 @@ def get_audio_note(task_id):
         if conn:
             conn.close()
 
+# ---------------- GET TASK ASSIGNMENTS ----------------
+@app.route('/tasks/assignments/<user_id>', methods=['GET'])
+def get_task_assignments(user_id):
+    try:
+        cursor = mysql.connector.connect(**db_config).cursor(dictionary=True)
+        
+        # Get tasks where the user is either the assigner or assignee
+        query = """
+            SELECT 
+                t.id,
+                t.title as task_name,
+                t.description,
+                t.deadline as due_date,
+                t.priority,
+                t.current_task,
+                assigner.id as assigner_id,
+                assigner.username as assigner_name,
+                assigner.role as assigner_role,
+                assignee.id as assignee_id,
+                assignee.username as assignee_name,
+                assignee.role as assignee_role
+            FROM tasks t
+            JOIN users assigner ON t.assigned_by = assigner.id
+            JOIN users assignee ON t.assigned_to = assignee.id
+            WHERE assigner.id = %s OR assignee.id = %s
+            ORDER BY t.created_at DESC
+        """
+        
+        cursor.execute(query, (user_id, user_id))
+        assignments = cursor.fetchall()
+        cursor.close()
+        
+        return jsonify({
+            'success': True,
+            'assignments': assignments
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500
+
 # ---------------- MAIN ----------------
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True) 
