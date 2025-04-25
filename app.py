@@ -258,9 +258,25 @@ def create_task():
 
         # Optional alarm settings
         alarm_settings = data.get('alarm_settings', {})
-        start_date = alarm_settings.get('start_date')
-        start_time = alarm_settings.get('start_time')
-        frequency = alarm_settings.get('frequency')
+        start_date = None
+        start_time = None
+        frequency = None
+        
+        if alarm_settings:
+            try:
+                if alarm_settings.get('start_date'):
+                    # Parse ISO format date to MySQL date format
+                    start_date = datetime.fromisoformat(alarm_settings['start_date'].replace('Z', '')).date()
+                if alarm_settings.get('start_time'):
+                    # Parse time string to MySQL time format
+                    start_time = alarm_settings['start_time']
+                frequency = alarm_settings.get('frequency')
+            except ValueError as e:
+                logger.error(f"Error parsing date/time: {e}")
+                return jsonify({
+                    'success': False,
+                    'message': f"Invalid date/time format: {str(e)}"
+                }), 400
 
         # Validate priority
         valid_priorities = ['low', 'medium', 'high', 'urgent']
