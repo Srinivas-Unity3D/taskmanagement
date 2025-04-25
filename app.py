@@ -40,7 +40,7 @@ def init_db():
             )
         """)
 
-        # Create tasks table
+        # Create tasks table with optional alarm fields
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS tasks (
                 task_id VARCHAR(36) PRIMARY KEY,
@@ -51,12 +51,15 @@ def init_db():
                 deadline DATETIME NOT NULL,
                 priority ENUM('low', 'medium', 'high', 'urgent') NOT NULL,
                 status ENUM('pending', 'in_progress', 'completed', 'snoozed') NOT NULL DEFAULT 'pending',
+                start_date DATE,
+                start_time TIME,
+                frequency VARCHAR(50),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             )
         """)
 
-        # Create audio notes table
+        # Create audio notes table with duration field
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS task_audio_notes (
                 audio_id VARCHAR(36) PRIMARY KEY,
@@ -235,57 +238,81 @@ def create_task():
         data = request.get_json()
         logger.debug(f"Received data: {data}")
 
+        # Required fields
         required_fields = ['title', 'assigned_by', 'assigned_to', 'deadline', 'priority']
         if not all(field in data for field in required_fields):
-            return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+            return jsonify({
+                'success': False,
+                'message': 'Missing required fields',
+                'required_fields': required_fields
+            }), 400
 
         task_id = str(uuid.uuid4())
         title = data['title']
-        description = data.get('description', '')
+        description = data.get('description', '')  # Optional
         assigned_by = data['assigned_by']
         assigned_to = data['assigned_to']
         deadline = data['deadline']
         priority = data['priority'].lower()
         status = data.get('status', 'pending').lower()
-        audio_note = data.get('audio_note')  # Base64 encoded audio file
-        attachments = data.get('attachments', [])  # List of file attachments
+
+        # Optional alarm settings
+        alarm_settings = data.get('alarm_settings', {})
+        start_date = alarm_settings.get('start_date')
+        start_time = alarm_settings.get('start_time')
+        frequency = alarm_settings.get('frequency')
 
         # Validate priority
         valid_priorities = ['low', 'medium', 'high', 'urgent']
         if priority not in valid_priorities:
-            return jsonify({'success': False, 'message': 'Invalid priority value'}), 400
+            return jsonify({
+                'success': False,
+                'message': 'Invalid priority value',
+                'valid_priorities': valid_priorities
+            }), 400
 
         # Validate status
         valid_statuses = ['pending', 'in_progress', 'completed', 'snoozed']
         if status not in valid_statuses:
-            return jsonify({'success': False, 'message': 'Invalid status value'}), 400
+            return jsonify({
+                'success': False,
+                'message': 'Invalid status value',
+                'valid_statuses': valid_statuses
+            }), 400
 
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor()
 
-        # Insert task
+        # Insert task with optional alarm settings
         cursor.execute("""
             INSERT INTO tasks (
                 task_id, title, description, assigned_by, assigned_to, 
-                deadline, priority, status
+                deadline, priority, status, start_date, start_time, frequency
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             task_id, title, description, assigned_by, assigned_to,
-            deadline, priority, status
+            deadline, priority, status, start_date, start_time, frequency
         ))
 
-        # Insert audio note if provided
+        # Handle optional voice note if provided
+        audio_note = data.get('audio_note')
         if audio_note:
             audio_id = str(uuid.uuid4())
             cursor.execute("""
                 INSERT INTO task_audio_notes (
-                    audio_id, task_id, audio_data
+                    audio_id, task_id, audio_data, duration
                 )
-                VALUES (%s, %s, %s)
-            """, (audio_id, task_id, audio_note))
+                VALUES (%s, %s, %s, %s)
+            """, (
+                audio_id,
+                task_id,
+                audio_note.get('audio_data'),
+                audio_note.get('duration', 0)
+            ))
 
-        # Insert attachments if any
+        # Handle optional attachments if provided
+        attachments = data.get('attachments', [])
         if attachments:
             attachment_values = []
             for attachment in attachments:
@@ -293,30 +320,46 @@ def create_task():
                 attachment_values.append((
                     attachment_id,
                     task_id,
-                    attachment['file_name'],
-                    attachment['file_type'],
-                    attachment['file_size'],
-                    attachment['file_data']  # Base64 encoded file data
+                    attachment.get('file_name', ''),
+                    attachment.get('file_type', ''),
+                    attachment.get('file_size', 0),
+                    attachment.get('file_data', '')
                 ))
 
-            cursor.executemany("""
-                INSERT INTO task_attachments (
-                    attachment_id, task_id, file_name, file_type, 
-                    file_size, file_data
-                )
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """, attachment_values)
+            if attachment_values:
+                cursor.executemany("""
+                    INSERT INTO task_attachments (
+                        attachment_id, task_id, file_name, file_type, 
+                        file_size, file_data
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, attachment_values)
 
         conn.commit()
         logger.info(f"Task created successfully: {task_id}")
+        
         return jsonify({
             'success': True,
             'message': 'Task created successfully',
             'task_id': task_id
         }), 201
+
+    except mysql.connector.Error as db_err:
+        logger.error(f"Database error in create_task: {db_err}")
+        if conn:
+            conn.rollback()
+        return jsonify({
+            'success': False,
+            'message': f"Database error: {str(db_err)}"
+        }), 500
     except Exception as e:
-        logger.error(f"Error creating task: {str(e)}")
-        return jsonify({'success': False, 'message': f"Error creating task: {str(e)}"}), 500
+        logger.error(f"Unexpected error in create_task: {e}")
+        if conn:
+            conn.rollback()
+        return jsonify({
+            'success': False,
+            'message': f"Error creating task: {str(e)}"
+        }), 500
     finally:
         if cursor:
             cursor.close()
