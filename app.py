@@ -758,7 +758,8 @@ def update_task(task_id):
         alarm_settings = data.get('alarm_settings')
         
         # Update task in database
-        cursor = mysql.connector.connect(**db_config).cursor()
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor()
         
         # Start with base update query
         update_query = """
@@ -817,7 +818,7 @@ def update_task(task_id):
                 data.get('updated_by')
             ))
 
-        mysql.connector.connect(**db_config).commit()
+        conn.commit()
         cursor.close()
 
         return jsonify({
