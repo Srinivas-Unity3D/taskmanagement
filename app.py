@@ -16,20 +16,16 @@ app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 # Production configurations
-app.config['DEBUG'] = False
-app.config['ENV'] = 'production'
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key-here')
+app.config['DEBUG'] = True  # Enable debug for development
+app.config['ENV'] = 'development'  # Set to development environment
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key')
 
-socketio = SocketIO(app, 
-    cors_allowed_origins="*",
-    async_mode='eventlet',  # Use eventlet as async mode
-    logger=True,  # Enable logging
-    engineio_logger=True  # Enable Engine.IO logging
-)
+socketio = SocketIO(app, cors_allowed_origins="*", ping_timeout=20, ping_interval=10,
+                   async_mode='threading', logger=True, engineio_logger=True)
 
-# Setup logging for production
+# Setup logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # Set to DEBUG for more detailed logs
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('app.log'),
@@ -51,22 +47,23 @@ connected_users = {}
 
 @socketio.on('connect')
 def handle_connect():
-    print('Client connected')
-
-@socketio.on('register')
-def handle_register(username):
-    """Register a connected user with their socket ID"""
-    connected_users[username] = request.sid
-    print(f'User {username} registered with socket {request.sid}')
+    print(f"Client connected: {request.sid}")
+    emit('connect_response', {'status': 'connected'})
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    """Remove disconnected users"""
-    for username, sid in list(connected_users.items()):
-        if sid == request.sid:
-            del connected_users[username]
-            print(f'User {username} disconnected')
-            break
+    user = next((username for username, sid in connected_users.items() if sid == request.sid), None)
+    if user:
+        del connected_users[user]
+        print(f"Client disconnected: {user} ({request.sid})")
+    else:
+        print(f"Unknown client disconnected: {request.sid}")
+
+@socketio.on('register')
+def handle_register(username):
+    connected_users[username] = request.sid
+    print(f"User registered: {username} ({request.sid})")
+    emit('register_response', {'status': 'registered', 'username': username})
 
 def notify_task_update(task_data, event_type='task_update'):
     """Notify relevant users about task updates"""
@@ -78,7 +75,7 @@ def notify_task_update(task_data, event_type='task_update'):
                 'type': event_type,
                 'task': task_data
             }, room=connected_users[assigned_to])
-        
+
         # Broadcast dashboard update to all connected users
         emit('dashboard_update', {
             'type': event_type,
@@ -186,17 +183,17 @@ def update_tasks_table():
 
         # Check if columns exist first
         cursor.execute("""
-            SELECT COUNT(*) as count 
-            FROM information_schema.columns 
-            WHERE table_schema = %s 
-            AND table_name = 'tasks' 
+            SELECT COUNT(*) as count
+            FROM information_schema.columns
+            WHERE table_schema = %s
+            AND table_name = 'tasks'
             AND column_name IN ('created_at', 'updated_at')
         """, (db_config['database'],))
-        
+
         result = cursor.fetchone()
         if result[0] < 2:  # If either column is missing
             logger.info("Adding timestamp columns to tasks table...")
-            
+
             # Add columns one by one to handle cases where one might exist
             try:
                 cursor.execute("""
@@ -222,7 +219,7 @@ def update_tasks_table():
             logger.info("Successfully updated tasks table schema")
         else:
             logger.info("Timestamp columns already exist in tasks table")
-            
+
     except Exception as e:
         logger.error(f"Error updating tasks table: {str(e)}")
         if conn:
@@ -349,7 +346,7 @@ def create_task():
                 if 'start_date' in alarm_settings and 'start_time' in alarm_settings:
                     start_date_str = alarm_settings['start_date']
                     start_time_str = alarm_settings['start_time']
-                    
+
                     # Parse and validate the date
                     try:
                         start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
@@ -402,7 +399,7 @@ def create_task():
         # Insert task with optional alarm settings
         cursor.execute("""
             INSERT INTO tasks (
-                task_id, title, description, assigned_by, assigned_to, 
+                task_id, title, description, assigned_by, assigned_to,
                 deadline, priority, status, start_date, start_time, frequency
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -445,7 +442,7 @@ def create_task():
             if attachment_values:
                 cursor.executemany("""
                     INSERT INTO task_attachments (
-                        attachment_id, task_id, file_name, file_type, 
+                        attachment_id, task_id, file_name, file_type,
                         file_size, file_data
                     )
                     VALUES (%s, %s, %s, %s, %s, %s)
@@ -453,7 +450,7 @@ def create_task():
 
         conn.commit()
         logger.info(f"Task created successfully: {task_id}")
-        
+
         # After successful task creation, notify users
         notify_task_update({
             'task_id': task_id,
@@ -513,13 +510,13 @@ def get_tasks():
         try:
             # First, check if the columns exist
             cursor.execute("""
-                SELECT COUNT(*) as count 
-                FROM information_schema.columns 
-                WHERE table_schema = %s 
-                AND table_name = 'tasks' 
+                SELECT COUNT(*) as count
+                FROM information_schema.columns
+                WHERE table_schema = %s
+                AND table_name = 'tasks'
                 AND column_name IN ('created_at', 'updated_at')
             """, (db_config['database'],))
-            
+
             result = cursor.fetchone()
             has_timestamp_columns = result['count'] == 2
 
@@ -541,8 +538,8 @@ def get_tasks():
                 LEFT JOIN task_attachments a ON t.task_id = a.task_id
                 LEFT JOIN task_audio_notes an ON t.task_id = an.task_id
                 {where_clause}
-                GROUP BY 
-                    t.task_id, t.title, t.description, 
+                GROUP BY
+                    t.task_id, t.title, t.description,
                     t.deadline, t.priority, t.status,
                     t.assigned_by, t.assigned_to
                     {group_by_timestamps}
@@ -587,14 +584,14 @@ def get_tasks():
             task_attachments = {}
             if tasks:
                 task_ids_with_attachments = [
-                    task['task_id'] for task in tasks 
+                    task['task_id'] for task in tasks
                     if task['attachment_count'] > 0
                 ]
-                
+
                 if task_ids_with_attachments:
                     placeholders = ', '.join(['%s'] * len(task_ids_with_attachments))
                     cursor.execute(f"""
-                        SELECT task_id, 
+                        SELECT task_id,
                                JSON_ARRAYAGG(
                                    JSON_OBJECT(
                                        'attachment_id', attachment_id,
@@ -605,7 +602,7 @@ def get_tasks():
                         WHERE task_id IN ({placeholders})
                         GROUP BY task_id
                     """, task_ids_with_attachments)
-                    
+
                     for row in cursor.fetchall():
                         task_attachments[row['task_id']] = row['attachments']
 
@@ -755,22 +752,22 @@ def get_task_assignments(user_id):
     try:
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor(dictionary=True)
-        
+
         # First get the user's role
         cursor.execute("SELECT role FROM users WHERE user_id = %s", (user_id,))
         user = cursor.fetchone()
-        
+
         if not user:
             return jsonify({
                 'success': False,
                 'message': 'User not found'
             }), 404
-            
+
         user_role = user['role'].lower()
-        
+
         # Base query with all fields
         base_query = """
-            SELECT 
+            SELECT
                 t.task_id,
                 t.title as task_name,
                 t.description,
@@ -787,7 +784,7 @@ def get_task_assignments(user_id):
             JOIN users assigner ON t.assigned_by = assigner.username
             JOIN users assignee ON t.assigned_to = assignee.username
         """
-        
+
         # If user is admin or super admin, show all tasks
         if user_role in ['admin', 'super admin']:
             query = base_query + " ORDER BY t.created_at DESC"
@@ -799,19 +796,19 @@ def get_task_assignments(user_id):
                 ORDER BY t.created_at DESC
             """
             cursor.execute(query, (user_id, user_id))
-        
+
         assignments = cursor.fetchall()
-        
+
         # Format dates for JSON serialization
         for assignment in assignments:
             if assignment['due_date']:
                 assignment['due_date'] = assignment['due_date'].isoformat()
-        
+
         return jsonify({
             'success': True,
             'assignments': assignments
         })
-        
+
     except Exception as e:
         logger.error(f"Error in get_task_assignments: {str(e)}")
         return jsonify({
@@ -829,20 +826,20 @@ def get_task_assignments(user_id):
 def update_task(task_id):
     try:
         data = request.get_json()
-        
+
         # Extract task data
         priority = data.get('priority')
         status = data.get('status')
         deadline = data.get('deadline')
         alarm_settings = data.get('alarm_settings')
-        
+
         # Update task in database
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor()
-        
+
         # Start with base update query
         update_query = """
-            UPDATE tasks 
+            UPDATE tasks
             SET priority = %s,
                 status = %s,
                 deadline = %s
@@ -861,14 +858,14 @@ def update_task(task_id):
                 alarm_settings.get('start_time'),
                 alarm_settings.get('frequency')
             ])
-        
+
         # Complete the query
         update_query += " WHERE task_id = %s"
         params.append(task_id)
 
         # Execute update
         cursor.execute(update_query, params)
-        
+
         # Handle attachments if provided
         if 'attachments' in data and data['attachments']:
             for attachment_data in data['attachments']:
@@ -923,12 +920,4 @@ def update_task(task_id):
 
 # ---------------- MAIN ----------------
 if __name__ == '__main__':
-    import eventlet
-    eventlet.monkey_patch()
-    socketio.run(app, 
-        debug=False,  # Disable debug in production
-        host='0.0.0.0', 
-        port=int(os.getenv('PORT', 5000)),
-        use_reloader=False,  # Disable reloader in production
-        log_output=True
-    ) 
+    socketio.run(app, host='0.0.0.0', port=5000, debug=True, use_reloader=False) 
