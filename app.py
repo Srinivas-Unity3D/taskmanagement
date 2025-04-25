@@ -104,6 +104,19 @@ def update_tasks_table():
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor()
 
+        # Add alarm-related columns if they don't exist
+        try:
+            cursor.execute("""
+                ALTER TABLE tasks
+                ADD COLUMN IF NOT EXISTS start_date DATE,
+                ADD COLUMN IF NOT EXISTS start_time TIME,
+                ADD COLUMN IF NOT EXISTS frequency VARCHAR(50)
+            """)
+            logger.info("Added alarm-related columns")
+        except mysql.connector.Error as e:
+            if e.errno != 1060:  # Ignore "column already exists" error
+                raise e
+
         # Check if columns exist first
         cursor.execute("""
             SELECT COUNT(*) as count 
