@@ -846,16 +846,31 @@ def get_task_assignments(user_id):
 def update_task(task_id):
     try:
         data = request.get_json()
+        logger.info(f"Updating task {task_id} with data: {data}")
+
+        # Update task in database
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor(dictionary=True)
+
+        # First get the current task data
+        cursor.execute("""
+            SELECT title, description, assigned_to, assigned_by
+            FROM tasks
+            WHERE task_id = %s
+        """, (task_id,))
+        current_task = cursor.fetchone()
+        
+        if not current_task:
+            return jsonify({
+                'success': False,
+                'message': 'Task not found'
+            }), 404
 
         # Extract task data
         priority = data.get('priority')
         status = data.get('status')
         deadline = data.get('deadline')
         alarm_settings = data.get('alarm_settings')
-
-        # Update task in database
-        conn = mysql.connector.connect(**db_config)
-        cursor = conn.cursor()
 
         # Start with base update query
         update_query = """
@@ -915,16 +930,24 @@ def update_task(task_id):
             ))
 
         conn.commit()
-        cursor.close()
 
-        # After successful update, notify users
-        notify_task_update({
+        # Prepare notification data with all necessary information
+        notification_data = {
             'task_id': task_id,
+            'title': current_task['title'],
+            'description': current_task['description'],
+            'assigned_to': current_task['assigned_to'],
+            'assigned_by': current_task['assigned_by'],
             'priority': priority,
             'status': status,
             'deadline': deadline,
-            'updated_by': data.get('updated_by')
-        }, 'task_updated')
+            'updated_by': data.get('updated_by'),
+            'update_time': datetime.now().isoformat()
+        }
+
+        # After successful update, notify users
+        logger.info("Task updated successfully, sending notifications")
+        notify_task_update(notification_data, 'task_updated')
 
         return jsonify({
             'success': True,
@@ -933,10 +956,16 @@ def update_task(task_id):
 
     except Exception as e:
         logger.error(f"Error updating task: {e}")
+        logger.exception("Full traceback:")
         return jsonify({
             'success': False,
             'message': f'Failed to update task: {str(e)}'
         }), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 # ---------------- MAIN ----------------
 if __name__ == '__main__':
