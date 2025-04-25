@@ -95,24 +95,55 @@ def init_db():
 
 # Initialize database on startup
 def update_tasks_table():
+    conn = None
+    cursor = None
     try:
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor()
 
-        # Add new columns if they don't exist
-        try:
-            cursor.execute("""
-                ALTER TABLE tasks
-                ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-            """)
+        # Check if columns exist first
+        cursor.execute("""
+            SELECT COUNT(*) as count 
+            FROM information_schema.columns 
+            WHERE table_schema = %s 
+            AND table_name = 'tasks' 
+            AND column_name IN ('created_at', 'updated_at')
+        """, (db_config['database'],))
+        
+        result = cursor.fetchone()
+        if result[0] < 2:  # If either column is missing
+            logger.info("Adding timestamp columns to tasks table...")
+            
+            # Add columns one by one to handle cases where one might exist
+            try:
+                cursor.execute("""
+                    ALTER TABLE tasks
+                    ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                """)
+                logger.info("Added created_at column")
+            except mysql.connector.Error as e:
+                if e.errno != 1060:  # Ignore "column already exists" error
+                    raise e
+
+            try:
+                cursor.execute("""
+                    ALTER TABLE tasks
+                    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                """)
+                logger.info("Added updated_at column")
+            except mysql.connector.Error as e:
+                if e.errno != 1060:  # Ignore "column already exists" error
+                    raise e
+
             conn.commit()
             logger.info("Successfully updated tasks table schema")
-        except Exception as e:
-            logger.error(f"Error updating tasks table: {str(e)}")
+        else:
+            logger.info("Timestamp columns already exist in tasks table")
             
     except Exception as e:
-        logger.error(f"Database connection error: {str(e)}")
+        logger.error(f"Error updating tasks table: {str(e)}")
+        if conn:
+            conn.rollback()
     finally:
         if cursor:
             cursor.close()
@@ -303,95 +334,142 @@ def get_tasks():
         logger.debug(f"Fetching tasks for username: {username}, role: {role}")
 
         if not username or not role:
-            return jsonify({'error': 'Missing username or role parameters'}), 400
+            return jsonify({'success': False, 'error': 'Missing username or role parameters'}), 400
 
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor(dictionary=True)
 
-        # Base query with joins to get audio notes and attachments
-        base_query = """
-            SELECT DISTINCT
-                t.task_id,
-                t.title,
-                t.description,
-                t.deadline,
-                t.priority,
-                t.status,
-                t.assigned_by,
-                t.assigned_to,
-                COALESCE(t.created_at, CURRENT_TIMESTAMP) as created_at,
-                COALESCE(t.updated_at, CURRENT_TIMESTAMP) as updated_at,
-                GROUP_CONCAT(DISTINCT 
-                    CASE 
-                        WHEN a.attachment_id IS NOT NULL 
-                        THEN JSON_OBJECT('attachment_id', a.attachment_id, 'file_name', a.file_name)
-                        ELSE NULL 
-                    END
-                ) as attachments,
-                MAX(CASE WHEN an.audio_id IS NOT NULL THEN 1 ELSE 0 END) as has_audio
-            FROM tasks t
-            LEFT JOIN task_attachments a ON t.task_id = a.task_id
-            LEFT JOIN task_audio_notes an ON t.task_id = an.task_id
-        """
+        try:
+            # First, check if the columns exist
+            cursor.execute("""
+                SELECT COUNT(*) as count 
+                FROM information_schema.columns 
+                WHERE table_schema = %s 
+                AND table_name = 'tasks' 
+                AND column_name IN ('created_at', 'updated_at')
+            """, (db_config['database'],))
+            
+            result = cursor.fetchone()
+            has_timestamp_columns = result['count'] == 2
 
-        # Add role-based filtering
-        if role.lower() in ['admin', 'super admin']:
-            query = f"{base_query} GROUP BY t.task_id, t.title, t.description, t.deadline, t.priority, t.status, t.assigned_by, t.assigned_to, t.created_at, t.updated_at ORDER BY t.deadline ASC"
-            logger.debug("Executing admin query")
-            cursor.execute(query)
-        else:
-            query = f"{base_query} WHERE t.assigned_to = %s OR t.assigned_by = %s GROUP BY t.task_id, t.title, t.description, t.deadline, t.priority, t.status, t.assigned_by, t.assigned_to, t.created_at, t.updated_at ORDER BY t.deadline ASC"
-            logger.debug(f"Executing user query for {username}")
-            cursor.execute(query, (username, username))
+            # Base query with joins to get audio notes and attachments
+            base_query = """
+                SELECT DISTINCT
+                    t.task_id,
+                    t.title,
+                    t.description,
+                    t.deadline,
+                    t.priority,
+                    t.status,
+                    t.assigned_by,
+                    t.assigned_to,
+                    {timestamp_columns},
+                    COUNT(DISTINCT a.attachment_id) as attachment_count,
+                    COUNT(DISTINCT an.audio_id) as has_audio
+                FROM tasks t
+                LEFT JOIN task_attachments a ON t.task_id = a.task_id
+                LEFT JOIN task_audio_notes an ON t.task_id = an.task_id
+                {where_clause}
+                GROUP BY 
+                    t.task_id, t.title, t.description, 
+                    t.deadline, t.priority, t.status,
+                    t.assigned_by, t.assigned_to
+                    {group_by_timestamps}
+                ORDER BY t.deadline ASC
+            """
 
-        tasks = cursor.fetchall()
-        logger.debug(f"Found {len(tasks)} tasks")
+            timestamp_columns = """
+                t.created_at as created_at,
+                t.updated_at as updated_at
+            """ if has_timestamp_columns else """
+                CURRENT_TIMESTAMP as created_at,
+                CURRENT_TIMESTAMP as updated_at
+            """
 
-        # Format response
-        formatted_tasks = []
-        for task in tasks:
-            formatted_task = {
-                'task_id': task['task_id'],
-                'title': task['title'],
-                'description': task['description'],
-                'deadline': task['deadline'].strftime('%Y-%m-%d %H:%M:%S') if task['deadline'] else None,
-                'priority': task['priority'],
-                'status': task['status'],
-                'assigned_by': task['assigned_by'],
-                'assigned_to': task['assigned_to'],
-                'created_at': task['created_at'].strftime('%Y-%m-%d %H:%M:%S') if task['created_at'] else None,
-                'updated_at': task['updated_at'].strftime('%Y-%m-%d %H:%M:%S') if task['updated_at'] else None,
-                'has_audio': bool(task['has_audio']),
-                'attachments': []
-            }
+            group_by_timestamps = ", t.created_at, t.updated_at" if has_timestamp_columns else ""
 
-            # Parse attachments if present
-            if task['attachments']:
-                try:
-                    # Split the concatenated JSON strings and parse each one
-                    attachment_strings = task['attachments'].split(',')
-                    formatted_task['attachments'] = [
-                        eval(attachment_str) for attachment_str in attachment_strings
-                        if attachment_str != 'NULL' and attachment_str.strip()
-                    ]
-                except Exception as e:
-                    logger.error(f"Error parsing attachments for task {task['task_id']}: {str(e)}")
-                    formatted_task['attachments'] = []
+            # Add role-based filtering
+            if role.lower() in ['admin', 'super admin']:
+                where_clause = ""
+            else:
+                where_clause = "WHERE t.assigned_to = %s OR t.assigned_by = %s"
 
-            formatted_tasks.append(formatted_task)
+            # Format the complete query
+            query = base_query.format(
+                timestamp_columns=timestamp_columns,
+                where_clause=where_clause,
+                group_by_timestamps=group_by_timestamps
+            )
 
-        return jsonify({
-            'success': True,
-            'tasks': formatted_tasks
-        }), 200
+            logger.debug(f"Executing query: {query}")
 
-    except mysql.connector.Error as err:
-        logger.error(f"Database error in get_tasks: {err}")
-        return jsonify({
-            'success': False,
-            'error': 'Database error',
-            'message': str(err)
-        }), 500
+            # Execute the query
+            if role.lower() in ['admin', 'super admin']:
+                cursor.execute(query)
+            else:
+                cursor.execute(query, (username, username))
+
+            tasks = cursor.fetchall()
+            logger.debug(f"Found {len(tasks)} tasks")
+
+            # Get attachments for tasks with attachments
+            task_attachments = {}
+            if tasks:
+                task_ids_with_attachments = [
+                    task['task_id'] for task in tasks 
+                    if task['attachment_count'] > 0
+                ]
+                
+                if task_ids_with_attachments:
+                    placeholders = ', '.join(['%s'] * len(task_ids_with_attachments))
+                    cursor.execute(f"""
+                        SELECT task_id, 
+                               JSON_ARRAYAGG(
+                                   JSON_OBJECT(
+                                       'attachment_id', attachment_id,
+                                       'file_name', file_name
+                                   )
+                               ) as attachments
+                        FROM task_attachments
+                        WHERE task_id IN ({placeholders})
+                        GROUP BY task_id
+                    """, task_ids_with_attachments)
+                    
+                    for row in cursor.fetchall():
+                        task_attachments[row['task_id']] = row['attachments']
+
+            # Format response
+            formatted_tasks = []
+            for task in tasks:
+                formatted_task = {
+                    'task_id': task['task_id'],
+                    'title': task['title'],
+                    'description': task['description'],
+                    'deadline': task['deadline'].strftime('%Y-%m-%d %H:%M:%S') if task['deadline'] else None,
+                    'priority': task['priority'],
+                    'status': task['status'],
+                    'assigned_by': task['assigned_by'],
+                    'assigned_to': task['assigned_to'],
+                    'created_at': task['created_at'].strftime('%Y-%m-%d %H:%M:%S') if task['created_at'] else None,
+                    'updated_at': task['updated_at'].strftime('%Y-%m-%d %H:%M:%S') if task['updated_at'] else None,
+                    'has_audio': bool(task['has_audio']),
+                    'attachments': task_attachments.get(task['task_id'], [])
+                }
+                formatted_tasks.append(formatted_task)
+
+            return jsonify({
+                'success': True,
+                'tasks': formatted_tasks
+            }), 200
+
+        except mysql.connector.Error as db_err:
+            logger.error(f"Database error in get_tasks: {db_err}")
+            return jsonify({
+                'success': False,
+                'error': 'Database error',
+                'message': str(db_err)
+            }), 500
+
     except Exception as e:
         logger.error(f"Unexpected error in get_tasks: {e}")
         return jsonify({
