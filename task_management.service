@@ -1,12 +1,21 @@
 [Unit]
 Description=Task Management Application
-After=network.target
+After=network.target mysql.service
+Wants=mysql.service
 
 [Service]
 User=root
 WorkingDirectory=/root/TaskManagement_Backend
 Environment="PATH=/root/TaskManagement_Backend/venv/bin"
-ExecStart=/root/TaskManagement_Backend/venv/bin/gunicorn --workers 4 --bind 0.0.0.0:5000 wsgi:app
+EnvironmentFile=/root/TaskManagement_Backend/.env
+ExecStart=/root/TaskManagement_Backend/venv/bin/gunicorn --config gunicorn_config.py wsgi:app
+Restart=always
+RestartSec=5
+StartLimitInterval=0
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target 

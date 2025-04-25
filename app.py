@@ -4,21 +4,88 @@ import mysql.connector
 import uuid
 import logging
 from datetime import datetime
+from flask_socketio import SocketIO, emit
+import json
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*"}})
 
-# Optional: Setup logging
-logging.basicConfig(level=logging.DEBUG)
+# Production configurations
+app.config['DEBUG'] = False
+app.config['ENV'] = 'production'
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key-here')
+
+socketio = SocketIO(app, 
+    cors_allowed_origins="*",
+    async_mode='eventlet',  # Use eventlet as async mode
+    logger=True,  # Enable logging
+    engineio_logger=True  # Enable Engine.IO logging
+)
+
+# Setup logging for production
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('app.log'),
+        logging.StreamHandler()
+    ]
+)
 logger = logging.getLogger(__name__)
 
-# DB config to reuse
+# DB config using environment variables
 db_config = {
-    'host': '134.209.149.12',
-    'user': 'root',
-    'password': '123',
-    'database': 'task_db'
+    'host': os.getenv('DB_HOST', '134.209.149.12'),
+    'user': os.getenv('DB_USER', 'root'),
+    'password': os.getenv('DB_PASSWORD', '123'),
+    'database': os.getenv('DB_NAME', 'task_db')
 }
+
+# Store connected users
+connected_users = {}
+
+@socketio.on('connect')
+def handle_connect():
+    print('Client connected')
+
+@socketio.on('register')
+def handle_register(username):
+    """Register a connected user with their socket ID"""
+    connected_users[username] = request.sid
+    print(f'User {username} registered with socket {request.sid}')
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    """Remove disconnected users"""
+    for username, sid in list(connected_users.items()):
+        if sid == request.sid:
+            del connected_users[username]
+            print(f'User {username} disconnected')
+            break
+
+def notify_task_update(task_data, event_type='task_update'):
+    """Notify relevant users about task updates"""
+    try:
+        # Notify the assigned user
+        assigned_to = task_data.get('assigned_to')
+        if assigned_to in connected_users:
+            emit('task_notification', {
+                'type': event_type,
+                'task': task_data
+            }, room=connected_users[assigned_to])
+        
+        # Broadcast dashboard update to all connected users
+        emit('dashboard_update', {
+            'type': event_type,
+            'task': task_data
+        }, broadcast=True)
+    except Exception as e:
+        print(f"Error in notify_task_update: {e}")
 
 # Create database tables if they don't exist
 def init_db():
@@ -387,6 +454,18 @@ def create_task():
         conn.commit()
         logger.info(f"Task created successfully: {task_id}")
         
+        # After successful task creation, notify users
+        notify_task_update({
+            'task_id': task_id,
+            'title': title,
+            'description': description,
+            'assigned_to': assigned_to,
+            'assigned_by': assigned_by,
+            'priority': priority,
+            'status': status,
+            'deadline': deadline
+        }, 'task_created')
+
         return jsonify({
             'success': True,
             'message': 'Task created successfully',
@@ -821,6 +900,15 @@ def update_task(task_id):
         conn.commit()
         cursor.close()
 
+        # After successful update, notify users
+        notify_task_update({
+            'task_id': task_id,
+            'priority': priority,
+            'status': status,
+            'deadline': deadline,
+            'updated_by': data.get('updated_by')
+        }, 'task_updated')
+
         return jsonify({
             'success': True,
             'message': 'Task updated successfully'
@@ -835,4 +923,12 @@ def update_task(task_id):
 
 # ---------------- MAIN ----------------
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True) 
+    import eventlet
+    eventlet.monkey_patch()
+    socketio.run(app, 
+        debug=False,  # Disable debug in production
+        host='0.0.0.0', 
+        port=int(os.getenv('PORT', 5000)),
+        use_reloader=False,  # Disable reloader in production
+        log_output=True
+    ) 
