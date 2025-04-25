@@ -967,56 +967,6 @@ def update_task(task_id):
         if conn:
             conn.close()
 
-@socketio.on('task_created')
-def handle_task_created(data):
-    logger.info(f"Task created event received: {data}")
-    try:
-        # Notify relevant users about the new task
-        notify_task_update(data, 'task_created')
-    except Exception as e:
-        logger.error(f"Error handling task_created event: {e}")
-        logger.exception("Full traceback:")
-
-@socketio.on('task_updated')
-def handle_task_updated(data):
-    logger.info(f"Task updated event received: {data}")
-    try:
-        # Notify relevant users about the task update
-        notify_task_update(data, 'task_updated')
-    except Exception as e:
-        logger.error(f"Error handling task_updated event: {e}")
-        logger.exception("Full traceback:")
-
-@socketio.on('task_assigned')
-def handle_task_assigned(data):
-    logger.info(f"Task assigned event received: {data}")
-    try:
-        # Notify relevant users about the task assignment
-        notify_task_update(data, 'task_assigned')
-    except Exception as e:
-        logger.error(f"Error handling task_assigned event: {e}")
-        logger.exception("Full traceback:")
-
-@socketio.on('task_status_changed')
-def handle_task_status_changed(data):
-    logger.info(f"Task status changed event received: {data}")
-    try:
-        # Notify relevant users about the status change
-        notify_task_update(data, 'task_status_changed')
-    except Exception as e:
-        logger.error(f"Error handling task_status_changed event: {e}")
-        logger.exception("Full traceback:")
-
-@socketio.on('task_comment_added')
-def handle_task_comment_added(data):
-    logger.info(f"Task comment added event received: {data}")
-    try:
-        # Notify relevant users about the new comment
-        notify_task_update(data, 'task_comment_added')
-    except Exception as e:
-        logger.error(f"Error handling task_comment_added event: {e}")
-        logger.exception("Full traceback:")
-
 # ---------------- MAIN ----------------
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=5000, debug=True, use_reloader=False) 
