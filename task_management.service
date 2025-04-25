@@ -1,0 +1,12 @@
+[Unit]
+Description=Task Management Application
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=/root/TaskManagement_Backend
+Environment="PATH=/root/TaskManagement_Backend/venv/bin"
+ExecStart=/root/TaskManagement_Backend/venv/bin/gunicorn --workers 4 --bind 0.0.0.0:5000 wsgi:app
+
+[Install]
+WantedBy=multi-user.target 

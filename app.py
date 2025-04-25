@@ -14,11 +14,87 @@ logger = logging.getLogger(__name__)
 
 # DB config to reuse
 db_config = {
-    'host': 'localhost',
+    'host': '134.209.149.12',
     'user': 'root',
-    'password': '',
+    'password': '123',
     'database': 'task_db'
 }
+
+# Create database tables if they don't exist
+def init_db():
+    try:
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor()
+
+        # Create users table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id VARCHAR(36) PRIMARY KEY,
+                username VARCHAR(100) UNIQUE NOT NULL,
+                email VARCHAR(255) NOT NULL,
+                phone VARCHAR(20) NOT NULL,
+                password VARCHAR(255) NOT NULL,
+                role VARCHAR(50) NOT NULL,
+                fcm_token VARCHAR(255),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Create tasks table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS tasks (
+                task_id VARCHAR(36) PRIMARY KEY,
+                title VARCHAR(255) NOT NULL,
+                description TEXT,
+                assigned_by VARCHAR(100) NOT NULL,
+                assigned_to VARCHAR(100) NOT NULL,
+                deadline DATETIME NOT NULL,
+                priority ENUM('low', 'medium', 'high', 'urgent') NOT NULL,
+                status ENUM('pending', 'in_progress', 'completed', 'snoozed') NOT NULL DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Create audio notes table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS task_audio_notes (
+                audio_id VARCHAR(36) PRIMARY KEY,
+                task_id VARCHAR(36) NOT NULL,
+                audio_data LONGBLOB NOT NULL,
+                duration INT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
+            )
+        """)
+
+        # Create attachments table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS task_attachments (
+                attachment_id VARCHAR(36) PRIMARY KEY,
+                task_id VARCHAR(36) NOT NULL,
+                file_name VARCHAR(255) NOT NULL,
+                file_type VARCHAR(100) NOT NULL,
+                file_size INT NOT NULL,
+                file_data LONGBLOB NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
+            )
+        """)
+
+        conn.commit()
+        logger.info("Database tables initialized successfully")
+
+    except Exception as e:
+        logger.error(f"Error initializing database: {str(e)}")
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+# Initialize database on startup
+init_db()
 
 @app.route('/')
 def home():
@@ -112,16 +188,67 @@ def create_task():
         assigned_by = data['assigned_by']
         assigned_to = data['assigned_to']
         deadline = data['deadline']
-        priority = data['priority']
-        status = data.get('status', 'Pending')
+        priority = data['priority'].lower()
+        status = data.get('status', 'pending').lower()
+        audio_note = data.get('audio_note')  # Base64 encoded audio file
+        attachments = data.get('attachments', [])  # List of file attachments
+
+        # Validate priority
+        valid_priorities = ['low', 'medium', 'high', 'urgent']
+        if priority not in valid_priorities:
+            return jsonify({'success': False, 'message': 'Invalid priority value'}), 400
+
+        # Validate status
+        valid_statuses = ['pending', 'in_progress', 'completed', 'snoozed']
+        if status not in valid_statuses:
+            return jsonify({'success': False, 'message': 'Invalid status value'}), 400
 
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor()
 
+        # Insert task
         cursor.execute("""
-            INSERT INTO tasks (task_id, title, description, assigned_by, assigned_to, deadline, priority, status)
+            INSERT INTO tasks (
+                task_id, title, description, assigned_by, assigned_to, 
+                deadline, priority, status
+            )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        """, (task_id, title, description, assigned_by, assigned_to, deadline, priority, status))
+        """, (
+            task_id, title, description, assigned_by, assigned_to,
+            deadline, priority, status
+        ))
+
+        # Insert audio note if provided
+        if audio_note:
+            audio_id = str(uuid.uuid4())
+            cursor.execute("""
+                INSERT INTO task_audio_notes (
+                    audio_id, task_id, audio_data
+                )
+                VALUES (%s, %s, %s)
+            """, (audio_id, task_id, audio_note))
+
+        # Insert attachments if any
+        if attachments:
+            attachment_values = []
+            for attachment in attachments:
+                attachment_id = str(uuid.uuid4())
+                attachment_values.append((
+                    attachment_id,
+                    task_id,
+                    attachment['file_name'],
+                    attachment['file_type'],
+                    attachment['file_size'],
+                    attachment['file_data']  # Base64 encoded file data
+                ))
+
+            cursor.executemany("""
+                INSERT INTO task_attachments (
+                    attachment_id, task_id, file_name, file_type, 
+                    file_size, file_data
+                )
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, attachment_values)
 
         conn.commit()
         logger.info(f"Task created successfully: {task_id}")
@@ -133,6 +260,90 @@ def create_task():
     except Exception as e:
         logger.error(f"Error creating task: {str(e)}")
         return jsonify({'success': False, 'message': f"Error creating task: {str(e)}"}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+# ---------------- GET TASKS ----------------
+@app.route('/tasks', methods=['GET'])
+def get_tasks():
+    try:
+        # Get query parameters
+        username = request.args.get('username')
+        role = request.args.get('role')
+
+        if not username or not role:
+            return jsonify({'error': 'Missing username or role parameters'}), 400
+
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor(dictionary=True)
+
+        # Base query with joins to get audio notes and attachments
+        base_query = """
+            SELECT 
+                t.task_id,
+                t.title,
+                t.description,
+                t.deadline,
+                t.priority,
+                t.status,
+                t.assigned_by,
+                t.assigned_to,
+                GROUP_CONCAT(DISTINCT a.attachment_id) as attachment_ids,
+                GROUP_CONCAT(DISTINCT a.file_name) as file_names,
+                an.audio_id
+            FROM tasks t
+            LEFT JOIN task_attachments a ON t.task_id = a.task_id
+            LEFT JOIN task_audio_notes an ON t.task_id = an.task_id
+        """
+
+        # Add role-based filtering
+        if role in ['Admin', 'Super Admin']:
+            query = f"{base_query} GROUP BY t.task_id ORDER BY t.deadline ASC"
+            cursor.execute(query)
+        else:
+            query = f"{base_query} WHERE t.assigned_to = %s OR t.assigned_by = %s GROUP BY t.task_id ORDER BY t.deadline ASC"
+            cursor.execute(query, (username, username))
+
+        tasks = cursor.fetchall()
+
+        # Format response
+        formatted_tasks = []
+        for task in tasks:
+            formatted_task = {
+                'task_id': task['task_id'],
+                'title': task['title'],
+                'description': task['description'],
+                'deadline': task['deadline'].strftime('%Y-%m-%d') if task['deadline'] else None,
+                'priority': task['priority'],
+                'status': task['status'],
+                'assigned_by': task['assigned_by'],
+                'assigned_to': task['assigned_to'],
+                'has_audio': bool(task['audio_id']),
+                'attachments': []
+            }
+
+            # Add attachment info if present
+            if task['attachment_ids']:
+                attachment_ids = task['attachment_ids'].split(',')
+                file_names = task['file_names'].split(',')
+                formatted_task['attachments'] = [
+                    {'attachment_id': aid, 'file_name': fname}
+                    for aid, fname in zip(attachment_ids, file_names)
+                ]
+
+            formatted_tasks.append(formatted_task)
+
+        return jsonify(formatted_tasks), 200
+
+    except mysql.connector.Error as err:
+        logger.error(f"Database error: {err}")
+        return jsonify({'error': 'Database error', 'details': str(err)}), 500
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        return jsonify({'error': 'Server error', 'details': str(e)}), 500
     finally:
         if cursor:
             cursor.close()
@@ -158,147 +369,93 @@ def get_users():
         if conn:
             conn.close()
 
-# ---------------- GET TASKS ----------------
-# @app.route('/tasks', methods=['GET'])
-# def get_tasks():
-#     conn = None
-#     cursor = None
-#     try:
-#         username = request.args.get('username')
-#         role = request.args.get('role')
-
-#         if not username or not role:
-#             return jsonify({'error': 'Missing username or role parameters'}), 400
-
-#         conn = mysql.connector.connect(**db_config)
-#         cursor = conn.cursor(dictionary=True)
-
-#         base_query = """
-#             SELECT 
-#                 t.task_id,
-#                 t.title,
-#                 t.description,
-#                 t.deadline,
-#                 t.priority,
-#                 t.status,
-#                 t.created_at,
-#                 assigner.username AS assigned_by,
-#                 assignee.username AS assigned_to
-#             FROM tasks t
-#             JOIN users assigner ON t.assigned_by = assigner.user_id
-#             JOIN users assignee ON t.assigned_to = assignee.user_id
-#         """
-
-#         if role in ['Admin', 'Super Admin']:
-#             query = f"{base_query} ORDER BY t.deadline ASC"
-#             cursor.execute(query)
-#         else:
-#             query = f"{base_query} WHERE assignee.username = %s ORDER BY t.deadline ASC"
-#             cursor.execute(query, (username,))
-
-#         tasks = cursor.fetchall()
-#         formatted_tasks = []
-#         for task in tasks:
-#             formatted_tasks.append({
-#                 'task_id': task['task_id'],
-#                 'title': task['title'],
-#                 'description': task['description'],
-#                 'deadline': task['deadline'].strftime('%Y-%m-%d') if task['deadline'] else None,
-#                 'priority': task['priority'],
-#                 'status': task['status'],
-#                 'assigned_by': task['assigned_by'],
-#                 'assigned_to': task['assigned_to'],
-#                 'created_at': task['created_at'].strftime('%Y-%m-%d %H:%M:%S') if task['created_at'] else None
-#             })
-
-#         return jsonify(formatted_tasks), 200
-
-#     except mysql.connector.Error as err:
-#         logger.error(f"Database error: {err}")
-#         return jsonify({'error': 'Database error'}), 500
-#     except Exception as e:
-#         logger.error(f"Unexpected error: {e}")
-#         return jsonify({'error': 'Server error'}), 500
-#     finally:
-#         if cursor:
-#             cursor.close()
-#         if conn:
-#             conn.close()
-
-@app.route('/tasks', methods=['GET'])
-def get_tasks():
+# ---------------- GET ATTACHMENT ----------------
+@app.route('/attachments/<attachment_id>', methods=['GET'])
+def get_attachment(attachment_id):
+    conn = None
+    cursor = None
     try:
-        # Get query parameters
-        username = request.args.get('username')
-        role = request.args.get('role')
-
-        if not username or not role:
-            return jsonify({'error': 'Missing username or role parameters'}), 400
-
-        # Create new database connection
-        conn = mysql.connector.connect(
-            host="localhost",
-            user="root",
-            password="",
-            database="task_db"
-        )
+        conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor(dictionary=True)
 
-        # Base query
-        base_query = """
-            SELECT 
-                task_id,
-                title,
-                description,
-                deadline,
-                priority,
-                status,
-                assigned_by,
-                assigned_to
-            FROM tasks
-        """
+        cursor.execute("""
+            SELECT file_name, file_type, file_size, file_data
+            FROM task_attachments
+            WHERE attachment_id = %s
+        """, (attachment_id,))
 
-        # Add role-based filtering
-        if role in ['Admin', 'Super Admin']:
-            query = f"{base_query} ORDER BY deadline ASC"
-            cursor.execute(query)
+        attachment = cursor.fetchone()
+        if attachment:
+            return jsonify({
+                'success': True,
+                'data': {
+                    'file_name': attachment['file_name'],
+                    'file_type': attachment['file_type'],
+                    'file_size': attachment['file_size'],
+                    'file_data': attachment['file_data'],
+                }
+            }), 200
         else:
-            query = f"{base_query} WHERE assigned_to = %s OR assigned_by = %s ORDER BY deadline ASC"
-            cursor.execute(query, (username, username))
-
-        tasks = cursor.fetchall()
-
-        # Format response
-        formatted_tasks = []
-        for task in tasks:
-            formatted_tasks.append({
-                'task_id': task['task_id'],
-                'title': task['title'],
-                'description': task['description'],
-                'deadline': task['deadline'].strftime('%Y-%m-%d') if task['deadline'] else None,
-                'priority': task['priority'],
-                'status': task['status'],
-                'assigned_by': task['assigned_by'],
-                'assigned_to': task['assigned_to']
-            })
-
-        return jsonify(formatted_tasks), 200
-
-    except mysql.connector.Error as err:
-        print(f"Database error: {err}")
-        return jsonify({'error': 'Database error', 'details': str(err)}), 500
+            return jsonify({
+                'success': False,
+                'message': 'Attachment not found'
+            }), 404
 
     except Exception as e:
-        print(f"Unexpected error: {e}")
-        return jsonify({'error': 'Server error', 'details': str(e)}), 500
-
+        logger.error(f"Error fetching attachment: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': f"Error fetching attachment: {str(e)}"
+        }), 500
     finally:
         if cursor:
             cursor.close()
         if conn:
             conn.close()
 
+# ---------------- GET AUDIO NOTE ----------------
+@app.route('/tasks/<task_id>/audio', methods=['GET'])
+def get_audio_note(task_id):
+    conn = None
+    cursor = None
+    try:
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute("""
+            SELECT audio_id, audio_data, duration
+            FROM task_audio_notes
+            WHERE task_id = %s
+        """, (task_id,))
+
+        audio = cursor.fetchone()
+        if audio:
+            return jsonify({
+                'success': True,
+                'data': {
+                    'audio_id': audio['audio_id'],
+                    'audio_data': audio['audio_data'],
+                    'duration': audio['duration'],
+                }
+            }), 200
+        else:
+            return jsonify({
+                'success': False,
+                'message': 'Audio note not found'
+            }), 404
+
+    except Exception as e:
+        logger.error(f"Error fetching audio note: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': f"Error fetching audio note: {str(e)}"
+        }), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 # ---------------- MAIN ----------------
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=True) 
