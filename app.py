@@ -112,6 +112,9 @@ def init_db():
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor()
 
+        # Enable foreign key checks
+        cursor.execute("SET FOREIGN_KEY_CHECKS=0")
+
         # Create users table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
@@ -141,7 +144,9 @@ def init_db():
                 start_time TIME,
                 frequency VARCHAR(50),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                FOREIGN KEY (assigned_by) REFERENCES users(username) ON DELETE CASCADE ON UPDATE CASCADE,
+                FOREIGN KEY (assigned_to) REFERENCES users(username) ON DELETE CASCADE ON UPDATE CASCADE
             )
         """)
 
@@ -151,11 +156,12 @@ def init_db():
                 audio_id VARCHAR(36) PRIMARY KEY,
                 task_id VARCHAR(36) NOT NULL,
                 audio_data LONGBLOB NOT NULL,
+                file_name VARCHAR(255) NOT NULL,
                 duration INT,
                 created_by VARCHAR(100),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE,
-                FOREIGN KEY (created_by) REFERENCES users(username)
+                FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE ON UPDATE CASCADE,
+                FOREIGN KEY (created_by) REFERENCES users(username) ON DELETE SET NULL ON UPDATE CASCADE
             )
         """)
 
@@ -170,16 +176,21 @@ def init_db():
                 file_data LONGBLOB NOT NULL,
                 created_by VARCHAR(100),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE,
-                FOREIGN KEY (created_by) REFERENCES users(username)
+                FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE ON UPDATE CASCADE,
+                FOREIGN KEY (created_by) REFERENCES users(username) ON DELETE SET NULL ON UPDATE CASCADE
             )
         """)
+
+        # Re-enable foreign key checks
+        cursor.execute("SET FOREIGN_KEY_CHECKS=1")
 
         conn.commit()
         logger.info("Database tables initialized successfully")
 
     except Exception as e:
         logger.error(f"Error initializing database: {str(e)}")
+        if conn:
+            conn.rollback()
     finally:
         if cursor:
             cursor.close()
@@ -256,8 +267,63 @@ def update_tasks_table():
         if conn:
             conn.close()
 
-init_db()
-update_tasks_table()
+def update_audio_notes_table():
+    conn = None
+    cursor = None
+    try:
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor()
+
+        # Check if file_name column exists
+        cursor.execute("""
+            SELECT COUNT(*) as count
+            FROM information_schema.columns
+            WHERE table_schema = %s
+            AND table_name = 'task_audio_notes'
+            AND column_name = 'file_name'
+        """, (db_config['database'],))
+
+        result = cursor.fetchone()
+        if result[0] == 0:  # Column doesn't exist
+            logger.info("Adding file_name column to task_audio_notes table...")
+            try:
+                cursor.execute("""
+                    ALTER TABLE task_audio_notes
+                    ADD COLUMN file_name VARCHAR(255) NOT NULL DEFAULT 'voice_note.wav'
+                """)
+                conn.commit()
+                logger.info("Successfully added file_name column")
+            except mysql.connector.Error as e:
+                if e.errno != 1060:  # Ignore "column already exists" error
+                    raise e
+        else:
+            logger.info("file_name column already exists in task_audio_notes table")
+
+    except Exception as e:
+        logger.error(f"Error updating task_audio_notes table: {str(e)}")
+        if conn:
+            conn.rollback()
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+# Initialize database on startup
+def initialize_application():
+    """Initialize the application and database"""
+    try:
+        # Initialize database tables
+        init_db()
+        
+        # Update tables with any new columns
+        update_tasks_table()
+        update_audio_notes_table()
+        
+        logger.info("Application initialized successfully")
+    except Exception as e:
+        logger.error(f"Error initializing application: {str(e)}")
+        raise
 
 @app.route('/')
 def home():
@@ -333,186 +399,73 @@ def login():
             conn.close()
 
 # ---------------- CREATE TASK ----------------
-@app.route('/create_task', methods=['POST'])
+@app.route('/api/tasks', methods=['POST'])
 def create_task():
-    conn = None
-    cursor = None
     try:
         data = request.get_json()
-        logger.debug(f"Received data: {data}")
-
-        # Required fields
-        required_fields = ['title', 'assigned_by', 'assigned_to', 'deadline', 'priority']
-        if not all(field in data for field in required_fields):
-            return jsonify({
-                'success': False,
-                'message': 'Missing required fields',
-                'required_fields': required_fields
-            }), 400
-
-        task_id = str(uuid.uuid4())
-        title = data['title']
-        description = data.get('description', '')  # Optional
-        assigned_by = data['assigned_by']
-        assigned_to = data['assigned_to']
-        deadline = data['deadline']
-        priority = data['priority'].lower()
-        status = data.get('status', 'pending').lower()
-
-        # Initialize alarm fields as None
-        start_date = None
-        start_time = None
-        frequency = None
-
-        # Handle alarm settings if present
+        title = data.get('title')
+        description = data.get('description')
+        assignee = data.get('assignee')
+        deadline = data.get('deadline')
+        priority = data.get('priority')
+        status = data.get('status')
+        audio_note = data.get('audio_note')
+        attachments = data.get('attachments', [])
         alarm_settings = data.get('alarm_settings')
-        if alarm_settings and isinstance(alarm_settings, dict):
-            try:
-                # Only process if both start_date and start_time are present
-                if 'start_date' in alarm_settings and 'start_time' in alarm_settings:
-                    start_date_str = alarm_settings['start_date']
-                    start_time_str = alarm_settings['start_time']
-
-                    # Parse and validate the date
-                    try:
-                        start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
-                    except ValueError as e:
-                        return jsonify({
-                            'success': False,
-                            'message': f'Invalid date format. Expected YYYY-MM-DD, got: {start_date_str}'
-                        }), 400
-
-                    # Parse and validate the time
-                    try:
-                        # This will raise ValueError if format is incorrect
-                        datetime.strptime(start_time_str, '%H:%M:%S')
-                        start_time = start_time_str
-                    except ValueError as e:
-                        return jsonify({
-                            'success': False,
-                            'message': f'Invalid time format. Expected HH:MM:SS, got: {start_time_str}'
-                        }), 400
-
-                    frequency = alarm_settings.get('frequency')
-            except Exception as e:
-                logger.error(f"Error processing alarm settings: {e}")
-                return jsonify({
-                    'success': False,
-                    'message': f'Error processing alarm settings: {str(e)}'
-                }), 400
-
-        # Validate priority
-        valid_priorities = ['low', 'medium', 'high', 'urgent']
-        if priority not in valid_priorities:
-            return jsonify({
-                'success': False,
-                'message': 'Invalid priority value',
-                'valid_priorities': valid_priorities
-            }), 400
-
-        # Validate status
-        valid_statuses = ['pending', 'in_progress', 'completed', 'snoozed']
-        if status not in valid_statuses:
-            return jsonify({
-                'success': False,
-                'message': 'Invalid status value',
-                'valid_statuses': valid_statuses
-            }), 400
+        created_by = data.get('created_by')
 
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor()
 
-        # Insert task with optional alarm settings
+        # Insert task
         cursor.execute("""
-            INSERT INTO tasks (
-                task_id, title, description, assigned_by, assigned_to,
-                deadline, priority, status, start_date, start_time, frequency
-            )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (
-            task_id, title, description, assigned_by, assigned_to,
-            deadline, priority, status, start_date, start_time, frequency
-        ))
+            INSERT INTO tasks (title, description, assignee, deadline, priority, status, created_by)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """, (title, description, assignee, deadline, priority, status, created_by))
+        
+        task_id = cursor.lastrowid
 
-        # Handle optional voice note if provided
-        audio_note = data.get('audio_note')
+        # Handle audio note
         if audio_note:
-            audio_id = str(uuid.uuid4())
+            audio_data = base64.b64decode(audio_note.get('data', ''))
+            audio_duration = audio_note.get('duration', 0)
+            file_name = audio_note.get('file_name', 'voice_note.wav')
+            
             cursor.execute("""
-                INSERT INTO task_audio_notes (
-                    audio_id, task_id, audio_data, duration, created_by
-                )
+                INSERT INTO task_audio_notes (task_id, audio_data, duration, created_by, file_name)
                 VALUES (%s, %s, %s, %s, %s)
-            """, (
-                audio_id,
-                task_id,
-                audio_note.get('audio_data'),
-                audio_note.get('duration', 0),
-                assigned_by
-            ))
+            """, (task_id, audio_data, audio_duration, created_by, file_name))
 
-        # Handle optional attachments if provided
-        attachments = data.get('attachments', [])
-        if attachments:
-            attachment_values = []
-            for attachment in attachments:
-                attachment_id = str(uuid.uuid4())
-                attachment_values.append((
-                    attachment_id,
-                    task_id,
-                    attachment.get('file_name', ''),
-                    attachment.get('file_type', ''),
-                    attachment.get('file_size', 0),
-                    attachment.get('file_data', ''),
-                    assigned_by
-                ))
+        # Handle attachments
+        for attachment in attachments:
+            file_data = base64.b64decode(attachment.get('data', ''))
+            file_name = attachment.get('name', 'unnamed_file')
+            file_type = attachment.get('type', 'application/octet-stream')
+            file_size = attachment.get('size', 0)
+            
+            cursor.execute("""
+                INSERT INTO task_attachments (task_id, file_data, file_name, file_type, file_size, created_by)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (task_id, file_data, file_name, file_type, file_size, created_by))
 
-            if attachment_values:
-                cursor.executemany("""
-                    INSERT INTO task_attachments (
-                        attachment_id, task_id, file_name, file_type,
-                        file_size, file_data, created_by
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """, attachment_values)
+        # Handle alarm settings
+        if alarm_settings:
+            alarm_time = alarm_settings.get('alarm_time')
+            alarm_type = alarm_settings.get('alarm_type')
+            
+            cursor.execute("""
+                INSERT INTO task_alarms (task_id, alarm_time, alarm_type)
+                VALUES (%s, %s, %s)
+            """, (task_id, alarm_time, alarm_type))
 
         conn.commit()
-        logger.info(f"Task created successfully: {task_id}")
+        return jsonify({'message': 'Task created successfully', 'task_id': task_id}), 201
 
-        # After successful task creation, notify users
-        notify_task_update({
-            'task_id': task_id,
-            'title': title,
-            'description': description,
-            'assigned_to': assigned_to,
-            'assigned_by': assigned_by,
-            'priority': priority,
-            'status': status,
-            'deadline': deadline
-        }, 'task_created')
-
-        return jsonify({
-            'success': True,
-            'message': 'Task created successfully',
-            'task_id': task_id
-        }), 201
-
-    except mysql.connector.Error as db_err:
-        logger.error(f"Database error in create_task: {db_err}")
-        if conn:
-            conn.rollback()
-        return jsonify({
-            'success': False,
-            'message': f"Database error: {str(db_err)}"
-        }), 500
     except Exception as e:
-        logger.error(f"Unexpected error in create_task: {e}")
+        logger.error(f"Error creating task: {str(e)}")
         if conn:
             conn.rollback()
-        return jsonify({
-            'success': False,
-            'message': f"Error creating task: {str(e)}"
-        }), 500
+        return jsonify({'error': str(e)}), 500
     finally:
         if cursor:
             cursor.close()
@@ -1052,51 +1005,40 @@ def update_task(task_id):
             conn.close()
 
 # ---------------- GET TASK VOICE NOTES ----------------
-@app.route('/tasks/<task_id>/voice_notes', methods=['GET'])
+@app.route('/api/tasks/<task_id>/voice-notes', methods=['GET'])
 def get_task_voice_notes(task_id):
-    conn = None
-    cursor = None
     try:
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor(dictionary=True)
-
+        
         cursor.execute("""
-            SELECT 
-                audio_id as id,
-                task_id,
-                duration,
-                created_by,
-                created_at
+            SELECT audio_data, duration, created_by, file_name, created_at
             FROM task_audio_notes
             WHERE task_id = %s
+            ORDER BY created_at DESC
         """, (task_id,))
-
-        voice_notes = cursor.fetchall()
         
-        # Convert datetime objects to string
+        notes = cursor.fetchall()
+        
+        if not notes:
+            return jsonify({'message': 'No voice notes found for this task'}), 404
+            
         formatted_notes = []
-        for note in voice_notes:
+        for note in notes:
             formatted_note = {
-                'id': note['id'],
-                'task_id': note['task_id'],
+                'audio_data': base64.b64encode(note['audio_data']).decode('utf-8'),
                 'duration': note['duration'],
                 'created_by': note['created_by'],
-                'created_at': note['created_at'].strftime('%Y-%m-%d %H:%M:%S') if note['created_at'] else None
+                'file_name': note['file_name'],
+                'created_at': note['created_at'].isoformat() if note['created_at'] else None
             }
             formatted_notes.append(formatted_note)
-
-        return jsonify({
-            'success': True,
-            'voice_notes': formatted_notes
-        }), 200
-
+            
+        return jsonify(formatted_notes), 200
+        
     except Exception as e:
         logger.error(f"Error fetching voice notes: {str(e)}")
-        return jsonify({
-            'success': False,
-            'message': f"Error fetching voice notes: {str(e)}",
-            'voice_notes': []
-        }), 500
+        return jsonify({'error': str(e)}), 500
     finally:
         if cursor:
             cursor.close()
@@ -1195,4 +1137,8 @@ def download_attachment(attachment_id):
 
 # ---------------- MAIN ----------------
 if __name__ == '__main__':
+    # Initialize the application
+    initialize_application()
+    
+    # Run the server
     socketio.run(app, host='0.0.0.0', port=5000, debug=True, use_reloader=False) 
