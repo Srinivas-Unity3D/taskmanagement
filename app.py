@@ -8,6 +8,7 @@ from flask_socketio import SocketIO, emit
 import json
 import os
 from dotenv import load_dotenv
+import base64
 
 # Load environment variables
 load_dotenv()
@@ -1049,14 +1050,22 @@ def get_task_voice_notes(task_id):
 
         voice_notes = cursor.fetchall()
         
-        # Convert datetime objects to string
+        # Convert datetime objects to string and encode binary data
+        formatted_notes = []
         for note in voice_notes:
-            if note['created_at']:
-                note['created_at'] = note['created_at'].strftime('%Y-%m-%d %H:%M:%S')
+            formatted_note = {
+                'id': note['id'],
+                'task_id': note['task_id'],
+                'audio_data': base64.b64encode(note['audio_data']).decode('utf-8') if note['audio_data'] else None,
+                'duration': note['duration'],
+                'created_by': note['created_by'],
+                'created_at': note['created_at'].strftime('%Y-%m-%d %H:%M:%S') if note['created_at'] else None
+            }
+            formatted_notes.append(formatted_note)
 
         return jsonify({
             'success': True,
-            'voice_notes': voice_notes
+            'voice_notes': formatted_notes
         }), 200
 
     except Exception as e:
