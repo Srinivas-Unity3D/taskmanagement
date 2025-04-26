@@ -967,6 +967,99 @@ def update_task(task_id):
         if conn:
             conn.close()
 
+# ---------------- GET TASK VOICE NOTES ----------------
+@app.route('/tasks/<task_id>/voice_notes', methods=['GET'])
+def get_task_voice_notes(task_id):
+    conn = None
+    cursor = None
+    try:
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute("""
+            SELECT 
+                audio_id as id,
+                task_id,
+                audio_data,
+                duration,
+                created_by,
+                created_at
+            FROM task_audio_notes
+            WHERE task_id = %s
+        """, (task_id,))
+
+        voice_notes = cursor.fetchall()
+        
+        # Convert datetime objects to string
+        for note in voice_notes:
+            if note['created_at']:
+                note['created_at'] = note['created_at'].strftime('%Y-%m-%d %H:%M:%S')
+
+        return jsonify({
+            'success': True,
+            'voice_notes': voice_notes
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error fetching voice notes: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': f"Error fetching voice notes: {str(e)}",
+            'voice_notes': []
+        }), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+# ---------------- GET TASK ATTACHMENTS ----------------
+@app.route('/tasks/<task_id>/attachments', methods=['GET'])
+def get_task_attachments(task_id):
+    conn = None
+    cursor = None
+    try:
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute("""
+            SELECT 
+                attachment_id as id,
+                task_id,
+                file_name,
+                file_type,
+                file_size,
+                created_by,
+                created_at
+            FROM task_attachments
+            WHERE task_id = %s
+        """, (task_id,))
+
+        attachments = cursor.fetchall()
+        
+        # Convert datetime objects to string
+        for attachment in attachments:
+            if attachment['created_at']:
+                attachment['created_at'] = attachment['created_at'].strftime('%Y-%m-%d %H:%M:%S')
+
+        return jsonify({
+            'success': True,
+            'attachments': attachments
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error fetching attachments: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': f"Error fetching attachments: {str(e)}",
+            'attachments': []
+        }), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
 # ---------------- MAIN ----------------
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=5000, debug=True, use_reloader=False) 
