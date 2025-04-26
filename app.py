@@ -846,92 +846,132 @@ def get_task_assignments(user_id):
 def update_task(task_id):
     try:
         data = request.get_json()
-        logger.info(f"Updating task {task_id} with data: {data}")
+        
+        # Validate required fields
+        required_fields = ['priority', 'status', 'deadline', 'updated_by']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({
+                    'success': False,
+                    'message': f'Missing required field: {field}'
+                }), 400
 
-        # Update task in database
+        priority = data['priority']
+        status = data['status']
+        deadline = data['deadline']
+        updated_by = data['updated_by']
+
+        # Validate priority
+        valid_priorities = ['low', 'medium', 'high', 'urgent']
+        if priority not in valid_priorities:
+            return jsonify({
+                'success': False,
+                'message': 'Invalid priority value',
+                'valid_priorities': valid_priorities
+            }), 400
+
+        # Validate status
+        valid_statuses = ['pending', 'in_progress', 'completed', 'snoozed']
+        if status not in valid_statuses:
+            return jsonify({
+                'success': False,
+                'message': 'Invalid status value',
+                'valid_statuses': valid_statuses
+            }), 400
+
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor(dictionary=True)
 
-        # First get the current task data
+        # Get current task data
         cursor.execute("""
-            SELECT title, description, assigned_to, assigned_by
-            FROM tasks
-            WHERE task_id = %s
+            SELECT * FROM tasks WHERE task_id = %s
         """, (task_id,))
         current_task = cursor.fetchone()
-        
+
         if not current_task:
             return jsonify({
                 'success': False,
                 'message': 'Task not found'
             }), 404
 
-        # Extract task data
-        priority = data.get('priority')
-        status = data.get('status')
-        deadline = data.get('deadline')
-        alarm_settings = data.get('alarm_settings')
-
-        # Start with base update query
-        update_query = """
-            UPDATE tasks
-            SET priority = %s,
-                status = %s,
-                deadline = %s
-        """
-        params = [priority, status, deadline]
-
-        # Add alarm settings if provided
-        if alarm_settings:
-            update_query += """,
-                start_date = %s,
-                start_time = %s,
-                frequency = %s
-            """
-            params.extend([
-                alarm_settings.get('start_date'),
-                alarm_settings.get('start_time'),
-                alarm_settings.get('frequency')
-            ])
-
-        # Complete the query
-        update_query += " WHERE task_id = %s"
-        params.append(task_id)
-
-        # Execute update
-        cursor.execute(update_query, params)
-
-        # Handle attachments if provided
-        if 'attachments' in data and data['attachments']:
-            for attachment_data in data['attachments']:
-                cursor.execute("""
-                    INSERT INTO task_attachments (task_id, file_name, file_data, file_type, file_size, created_by)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                """, (
-                    task_id,
-                    attachment_data['file_name'],
-                    attachment_data['file_data'],
-                    attachment_data['file_type'],
-                    attachment_data['file_size'],
-                    data.get('updated_by')
-                ))
+        # Update task
+        cursor.execute("""
+            UPDATE tasks 
+            SET priority = %s, status = %s, deadline = %s
+            WHERE task_id = %s
+        """, (priority, status, deadline, task_id))
 
         # Handle voice note if provided
-        if 'audio_note' in data and data['audio_note']:
-            audio_data = data['audio_note']
+        audio_note = data.get('audio_note')
+        if audio_note:
+            # First, delete existing voice notes for this task
             cursor.execute("""
-                INSERT INTO task_audio_notes (task_id, audio_data, duration, created_by)
-                VALUES (%s, %s, %s, %s)
+                DELETE FROM task_audio_notes WHERE task_id = %s
+            """, (task_id,))
+            
+            # Then insert the new voice note
+            audio_id = str(uuid.uuid4())
+            cursor.execute("""
+                INSERT INTO task_audio_notes (
+                    audio_id, task_id, audio_data, duration, created_by
+                )
+                VALUES (%s, %s, %s, %s, %s)
             """, (
+                audio_id,
                 task_id,
-                audio_data['audio_data'],
-                audio_data.get('duration', 0),
-                data.get('updated_by')
+                audio_note.get('audio_data'),
+                audio_note.get('duration', 0),
+                updated_by
+            ))
+
+        # Handle attachments if provided
+        attachments = data.get('attachments')
+        if attachments:
+            # First, delete existing attachments for this task
+            cursor.execute("""
+                DELETE FROM task_attachments WHERE task_id = %s
+            """, (task_id,))
+            
+            # Then insert new attachments
+            attachment_values = []
+            for attachment in attachments:
+                attachment_id = str(uuid.uuid4())
+                attachment_values.append((
+                    attachment_id,
+                    task_id,
+                    attachment.get('file_name', ''),
+                    attachment.get('file_type', ''),
+                    attachment.get('file_size', 0),
+                    attachment.get('file_data', ''),
+                    updated_by
+                ))
+
+            if attachment_values:
+                cursor.executemany("""
+                    INSERT INTO task_attachments (
+                        attachment_id, task_id, file_name, file_type,
+                        file_size, file_data, created_by
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """, attachment_values)
+
+        # Handle alarm settings if provided
+        alarm_settings = data.get('alarm_settings')
+        if alarm_settings:
+            cursor.execute("""
+                UPDATE tasks 
+                SET start_date = %s, start_time = %s, frequency = %s
+                WHERE task_id = %s
+            """, (
+                alarm_settings.get('start_date'),
+                alarm_settings.get('start_time'),
+                alarm_settings.get('frequency'),
+                task_id
             ))
 
         conn.commit()
 
-        # Prepare notification data with all necessary information
+        # Prepare notification data
         notification_data = {
             'task_id': task_id,
             'title': current_task['title'],
@@ -941,26 +981,39 @@ def update_task(task_id):
             'priority': priority,
             'status': status,
             'deadline': deadline,
-            'updated_by': data.get('updated_by'),
+            'updated_by': updated_by,
             'update_time': datetime.now().isoformat()
         }
 
         # After successful update, notify users
-        logger.info("Task updated successfully, sending notifications")
         notify_task_update(notification_data, 'task_updated')
 
         return jsonify({
             'success': True,
-            'message': 'Task updated successfully'
+            'message': 'Task updated successfully',
+            'task_id': task_id
         }), 200
 
-    except Exception as e:
-        logger.error(f"Error updating task: {e}")
-        logger.exception("Full traceback:")
+    except mysql.connector.Error as db_err:
+        logger.error(f"Database error in update_task: {db_err}")
+        if conn:
+            conn.rollback()
         return jsonify({
             'success': False,
-            'message': f'Failed to update task: {str(e)}'
+            'message': f"Database error: {str(db_err)}",
+            'task_id': task_id
         }), 500
+
+    except Exception as e:
+        logger.error(f"Error updating task: {str(e)}")
+        if conn:
+            conn.rollback()
+        return jsonify({
+            'success': False,
+            'message': f"Error updating task: {str(e)}",
+            'task_id': task_id
+        }), 500
+
     finally:
         if cursor:
             cursor.close()
