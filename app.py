@@ -707,10 +707,27 @@ def get_attachment(attachment_id):
             # Create a BytesIO object from the binary data
             file_data = io.BytesIO(attachment['file_data'])
             
+            # Determine the correct mimetype based on file type
+            file_type = attachment['file_type'].lower()
+            if file_type in ['jpg', 'jpeg']:
+                mimetype = 'image/jpeg'
+            elif file_type == 'png':
+                mimetype = 'image/png'
+            elif file_type == 'pdf':
+                mimetype = 'application/pdf'
+            elif file_type in ['doc', 'docx']:
+                mimetype = 'application/msword'
+            elif file_type in ['xls', 'xlsx']:
+                mimetype = 'application/vnd.ms-excel'
+            elif file_type == 'txt':
+                mimetype = 'text/plain'
+            else:
+                mimetype = 'application/octet-stream'
+            
             # Send the file with proper mimetype
             return send_file(
                 file_data,
-                mimetype=f'application/{attachment["file_type"]}',
+                mimetype=mimetype,
                 as_attachment=True,
                 download_name=attachment['file_name']
             )
@@ -742,7 +759,7 @@ def get_audio_note(task_id):
         cursor = conn.cursor(dictionary=True)
 
         cursor.execute("""
-            SELECT audio_id, audio_data, duration
+            SELECT audio_id, audio_data, duration, file_name
             FROM task_audio_notes
             WHERE task_id = %s
         """, (task_id,))
@@ -752,12 +769,15 @@ def get_audio_note(task_id):
             # Create a BytesIO object from the binary data
             audio_data = io.BytesIO(audio['audio_data'])
             
+            # Get the filename, default to WAV if not specified
+            filename = audio.get('file_name', f'voice_note_{audio["audio_id"]}.wav')
+            
             # Send the file with proper mimetype
             return send_file(
                 audio_data,
-                mimetype='audio/wav',
+                mimetype='audio/wav',  # Always use WAV format
                 as_attachment=True,
-                download_name=f'voice_note_{audio["audio_id"]}.wav'
+                download_name=filename
             )
         else:
             return jsonify({
