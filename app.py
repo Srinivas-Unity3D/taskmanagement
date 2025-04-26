@@ -1060,6 +1060,49 @@ def get_task_attachments(task_id):
         if conn:
             conn.close()
 
+# ---------------- DOWNLOAD ATTACHMENT ----------------
+@app.route('/attachments/<attachment_id>/download', methods=['GET'])
+def download_attachment(attachment_id):
+    conn = None
+    cursor = None
+    try:
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute("""
+            SELECT file_name, file_type, file_data
+            FROM task_attachments
+            WHERE attachment_id = %s
+        """, (attachment_id,))
+
+        attachment = cursor.fetchone()
+        if not attachment:
+            return jsonify({
+                'success': False,
+                'message': 'Attachment not found'
+            }), 404
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'file_name': attachment['file_name'],
+                'file_type': attachment['file_type'],
+                'file_data': attachment['file_data']
+            }
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error downloading attachment: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': f"Error downloading attachment: {str(e)}"
+        }), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
 # ---------------- MAIN ----------------
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=5000, debug=True, use_reloader=False) 
