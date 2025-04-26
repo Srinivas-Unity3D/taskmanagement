@@ -150,8 +150,10 @@ def init_db():
                 task_id VARCHAR(36) NOT NULL,
                 audio_data LONGBLOB NOT NULL,
                 duration INT,
+                created_by VARCHAR(100),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
+                FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE,
+                FOREIGN KEY (created_by) REFERENCES users(username)
             )
         """)
 
@@ -161,11 +163,13 @@ def init_db():
                 attachment_id VARCHAR(36) PRIMARY KEY,
                 task_id VARCHAR(36) NOT NULL,
                 file_name VARCHAR(255) NOT NULL,
-                file_type VARCHAR(100) NOT NULL,
-                file_size INT NOT NULL,
+                file_type VARCHAR(50),
+                file_size BIGINT,
                 file_data LONGBLOB NOT NULL,
+                created_by VARCHAR(100),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
+                FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE,
+                FOREIGN KEY (created_by) REFERENCES users(username)
             )
         """)
 
@@ -434,14 +438,15 @@ def create_task():
             audio_id = str(uuid.uuid4())
             cursor.execute("""
                 INSERT INTO task_audio_notes (
-                    audio_id, task_id, audio_data, duration
+                    audio_id, task_id, audio_data, duration, created_by
                 )
-                VALUES (%s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s)
             """, (
                 audio_id,
                 task_id,
                 audio_note.get('audio_data'),
-                audio_note.get('duration', 0)
+                audio_note.get('duration', 0),
+                assigned_by
             ))
 
         # Handle optional attachments if provided
@@ -456,16 +461,17 @@ def create_task():
                     attachment.get('file_name', ''),
                     attachment.get('file_type', ''),
                     attachment.get('file_size', 0),
-                    attachment.get('file_data', '')
+                    attachment.get('file_data', ''),
+                    assigned_by
                 ))
 
             if attachment_values:
                 cursor.executemany("""
                     INSERT INTO task_attachments (
                         attachment_id, task_id, file_name, file_type,
-                        file_size, file_data
+                        file_size, file_data, created_by
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """, attachment_values)
 
         conn.commit()
