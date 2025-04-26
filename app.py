@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file, Response
 from flask_cors import CORS
 import mysql.connector
 import uuid
@@ -9,6 +9,7 @@ import json
 import os
 from dotenv import load_dotenv
 import base64
+import io
 
 # Load environment variables
 load_dotenv()
@@ -703,15 +704,16 @@ def get_attachment(attachment_id):
 
         attachment = cursor.fetchone()
         if attachment:
-            return jsonify({
-                'success': True,
-                'data': {
-                    'file_name': attachment['file_name'],
-                    'file_type': attachment['file_type'],
-                    'file_size': attachment['file_size'],
-                    'file_data': attachment['file_data'],
-                }
-            }), 200
+            # Create a BytesIO object from the binary data
+            file_data = io.BytesIO(attachment['file_data'])
+            
+            # Send the file with proper mimetype
+            return send_file(
+                file_data,
+                mimetype=f'application/{attachment["file_type"]}',
+                as_attachment=True,
+                download_name=attachment['file_name']
+            )
         else:
             return jsonify({
                 'success': False,
@@ -747,14 +749,16 @@ def get_audio_note(task_id):
 
         audio = cursor.fetchone()
         if audio:
-            return jsonify({
-                'success': True,
-                'data': {
-                    'audio_id': audio['audio_id'],
-                    'audio_data': audio['audio_data'],
-                    'duration': audio['duration'],
-                }
-            }), 200
+            # Create a BytesIO object from the binary data
+            audio_data = io.BytesIO(audio['audio_data'])
+            
+            # Send the file with proper mimetype
+            return send_file(
+                audio_data,
+                mimetype='audio/wav',
+                as_attachment=True,
+                download_name=f'voice_note_{audio["audio_id"]}.wav'
+            )
         else:
             return jsonify({
                 'success': False,
@@ -1040,7 +1044,6 @@ def get_task_voice_notes(task_id):
             SELECT 
                 audio_id as id,
                 task_id,
-                audio_data,
                 duration,
                 created_by,
                 created_at
@@ -1050,13 +1053,12 @@ def get_task_voice_notes(task_id):
 
         voice_notes = cursor.fetchall()
         
-        # Convert datetime objects to string and encode binary data
+        # Convert datetime objects to string
         formatted_notes = []
         for note in voice_notes:
             formatted_note = {
                 'id': note['id'],
                 'task_id': note['task_id'],
-                'audio_data': base64.b64encode(note['audio_data']).decode('utf-8') if note['audio_data'] else None,
                 'duration': note['duration'],
                 'created_by': note['created_by'],
                 'created_at': note['created_at'].strftime('%Y-%m-%d %H:%M:%S') if note['created_at'] else None
