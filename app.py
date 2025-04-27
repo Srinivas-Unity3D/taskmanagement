@@ -966,14 +966,35 @@ def update_task(task_id):
                 task_id
             ))
 
+        # Get updated task data for notification
+        cursor.execute("""
+            SELECT task_id, title, description, deadline, priority, status, assigned_by, assigned_to, created_at, updated_at
+            FROM tasks 
+            WHERE task_id = %s
+        """, (task_id,))
+        updated_task = cursor.fetchone()
+
         conn.commit()
 
+        # Prepare notification data with complete task information
+        notification_data = {
+            'task_id': updated_task['task_id'],
+            'title': updated_task['title'],
+            'description': updated_task['description'],
+            'deadline': updated_task['deadline'].isoformat() if updated_task['deadline'] else None,
+            'priority': updated_task['priority'],
+            'status': updated_task['status'],
+            'assigned_by': updated_task['assigned_by'],
+            'assigned_to': updated_task['assigned_to'],
+            'updated_by': updated_by
+        }
+
         # After task update logic
-        notify_task_update(data, event_type='task_updated')
+        notify_task_update(notification_data, event_type='task_updated')
         # Call FCM notification function
         threading.Thread(
             target=send_fcm_notification,
-            args=(data, 'updated')
+            args=(notification_data, 'updated')
         ).start()
 
         return jsonify({
