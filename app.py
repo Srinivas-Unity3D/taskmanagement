@@ -10,6 +10,8 @@ import os
 from dotenv import load_dotenv
 import base64
 import io
+from google.oauth2 import service_account
+import firebase_admin
 
 # Load environment variables
 load_dotenv()
@@ -46,6 +48,14 @@ db_config = {
 
 # Store connected users
 connected_users = {}
+
+# Load Google Cloud credentials from environment variable
+credentials_info = os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON')
+if credentials_info:
+    credentials = service_account.Credentials.from_service_account_info(json.loads(credentials_info))
+    firebase_admin.initialize_app(credentials)
+else:
+    raise Exception("Google Cloud credentials not found in environment variables.")
 
 @socketio.on('connect')
 def handle_connect():
@@ -459,6 +469,12 @@ def create_task():
             """, (task_id, alarm_time, alarm_type))
 
         conn.commit()
+
+        # After task creation logic
+        notify_task_update(data, event_type='task_created')
+        # Call FCM notification function
+        send_fcm_notification(data, event_type='task_created')
+
         return jsonify({'message': 'Task created successfully', 'task_id': task_id}), 201
 
     except Exception as e:
@@ -955,22 +971,10 @@ def update_task(task_id):
 
         conn.commit()
 
-        # Prepare notification data
-        notification_data = {
-            'task_id': task_id,
-            'title': current_task['title'],
-            'description': current_task['description'],
-            'assigned_to': current_task['assigned_to'],
-            'assigned_by': current_task['assigned_by'],
-            'priority': priority,
-            'status': status,
-            'deadline': deadline,
-            'updated_by': updated_by,
-            'update_time': datetime.now().isoformat()
-        }
-
-        # After successful update, notify users
-        notify_task_update(notification_data, 'task_updated')
+        # After task update logic
+        notify_task_update(data, event_type='task_updated')
+        # Call FCM notification function
+        send_fcm_notification(data, event_type='task_updated')
 
         return jsonify({
             'success': True,
