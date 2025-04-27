@@ -12,6 +12,8 @@ import base64
 import io
 from google.oauth2 import service_account
 import firebase_admin
+from push_notification import send_fcm_notification
+import threading
 
 # Load environment variables
 load_dotenv()
@@ -48,14 +50,6 @@ db_config = {
 
 # Store connected users
 connected_users = {}
-
-# Load Google Cloud credentials from environment variable
-credentials_info = os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON')
-if credentials_info:
-    credentials = service_account.Credentials.from_service_account_info(json.loads(credentials_info))
-    firebase_admin.initialize_app(credentials)
-else:
-    raise Exception("Google Cloud credentials not found in environment variables.")
 
 @socketio.on('connect')
 def handle_connect():
@@ -473,7 +467,10 @@ def create_task():
         # After task creation logic
         notify_task_update(data, event_type='task_created')
         # Call FCM notification function
-        send_fcm_notification(data, event_type='task_created')
+        threading.Thread(
+            target=send_fcm_notification,
+            args=(data, 'created')
+        ).start()
 
         return jsonify({'message': 'Task created successfully', 'task_id': task_id}), 201
 
@@ -974,7 +971,10 @@ def update_task(task_id):
         # After task update logic
         notify_task_update(data, event_type='task_updated')
         # Call FCM notification function
-        send_fcm_notification(data, event_type='task_updated')
+        threading.Thread(
+            target=send_fcm_notification,
+            args=(data, 'updated')
+        ).start()
 
         return jsonify({
             'success': True,

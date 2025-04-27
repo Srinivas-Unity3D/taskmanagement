@@ -2,28 +2,63 @@ import firebase_admin
 from firebase_admin import messaging, credentials
 import os
 import json
-from google.oauth2 import service_account
 
 def initialize_firebase():
     try:
-        # Try to use the credentials file
-        cred = credentials.Certificate('firebase-credentials.json')
-        firebase_admin.initialize_app(cred)
+        # First try to get credentials from environment variable
+        firebase_creds = os.getenv('FIREBASE_CREDENTIALS')
+        if firebase_creds:
+            # Parse the JSON string from environment variable
+            cred_dict = json.loads(firebase_creds)
+            cred = credentials.Certificate(cred_dict)
+        else:
+            # Fallback to file-based credentials
+            cred = credentials.Certificate('firebase-credentials.json')
+        
+        if not firebase_admin._apps:  # Only initialize if not already initialized
+            firebase_admin.initialize_app(cred)
         print("Firebase initialized successfully")
     except Exception as e:
         print(f"Error initializing Firebase: {e}")
         raise
 
 def send_fcm_notification(task_data, event_type):
+    """
+    Send FCM notification for task events
+    task_data should contain: title, assigned_to, assigned_by
+    event_type can be: created, updated, deleted, etc.
+    """
     title = f"Task {event_type.replace('_', ' ').title()}"
     body = f"Task '{task_data['title']}' assigned to {task_data['assigned_to']} by {task_data['assigned_by']} is {event_type.replace('_', ' ')}."
     topic = task_data.get('assigned_to', 'default_topic')
 
+    # Add sound and vibration to the notification
     message = messaging.Message(
         notification=messaging.Notification(
             title=title,
             body=body,
         ),
+        android=messaging.AndroidConfig(
+            priority='high',
+            notification=messaging.AndroidNotification(
+                sound='default',
+                priority='high',
+                vibrate_timings=['1s', '0.5s', '1s']
+            )
+        ),
+        apns=messaging.APNSConfig(
+            payload=messaging.APNSPayload(
+                aps=messaging.Aps(
+                    sound='default',
+                    badge=1
+                )
+            )
+        ),
+        data={
+            'event_type': event_type,
+            'task_id': str(task_data.get('task_id', '')),
+            'click_action': 'FLUTTER_NOTIFICATION_CLICK'
+        },
         topic=topic,
     )
 
