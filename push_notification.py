@@ -1,16 +1,18 @@
 import firebase_admin
-from firebase_admin import messaging
+from firebase_admin import messaging, credentials
 import os
 import json
 from google.oauth2 import service_account
 
-# Load Google Cloud credentials from environment variable
-credentials_info = os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON')
-if credentials_info:
-    credentials = service_account.Credentials.from_service_account_info(json.loads(credentials_info))
-    firebase_admin.initialize_app(credentials)
-else:
-    raise Exception("Google Cloud credentials not found in environment variables.")
+def initialize_firebase():
+    try:
+        # Try to use the credentials file
+        cred = credentials.Certificate('firebase-credentials.json')
+        firebase_admin.initialize_app(cred)
+        print("Firebase initialized successfully")
+    except Exception as e:
+        print(f"Error initializing Firebase: {e}")
+        raise
 
 def send_fcm_notification(task_data, event_type):
     title = f"Task {event_type.replace('_', ' ').title()}"
@@ -28,5 +30,10 @@ def send_fcm_notification(task_data, event_type):
     try:
         response = messaging.send(message)
         print(f"FCM notification sent: {response}")
+        return {"success": True, "message_id": response}
     except Exception as e:
-        print(f"Error sending FCM notification: {e}") 
+        print(f"Error sending FCM notification: {e}")
+        return {"success": False, "error": str(e)}
+
+# Initialize Firebase when the module is imported
+initialize_firebase() 
