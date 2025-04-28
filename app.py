@@ -1205,6 +1205,8 @@ def get_notifications():
         user_id = request.args.get('user_id')
         username = request.args.get('username')
 
+        logger.info(f"Fetching notifications for user_id: {user_id}, username: {username}")
+
         if not user_id or not username:
             return jsonify({
                 'success': False,
@@ -1236,28 +1238,36 @@ def get_notifications():
                 n.is_read,
                 n.created_at,
                 t.priority,
-                t.status
+                t.status,
+                t.deadline
             FROM task_notifications n
-            JOIN tasks t ON n.task_id = t.task_id
+            LEFT JOIN tasks t ON n.task_id = t.task_id
             WHERE n.target_user = %s
             ORDER BY n.created_at DESC
             LIMIT 50
         """, (username,))
 
         notifications = cursor.fetchall()
+        logger.info(f"Found {len(notifications)} notifications for user {username}")
 
-        # Format timestamps
+        # Format timestamps and add additional task info
+        formatted_notifications = []
         for notification in notifications:
+            formatted_notification = dict(notification)
             if notification['created_at']:
-                notification['created_at'] = notification['created_at'].isoformat()
+                formatted_notification['created_at'] = notification['created_at'].isoformat()
+            if notification['deadline']:
+                formatted_notification['deadline'] = notification['deadline'].isoformat()
+            formatted_notifications.append(formatted_notification)
 
         return jsonify({
             'success': True,
-            'notifications': notifications
+            'notifications': formatted_notifications
         }), 200
 
     except Exception as e:
         logger.error(f"Error fetching notifications: {str(e)}")
+        logger.exception("Full traceback:")
         return jsonify({
             'success': False,
             'message': str(e)
@@ -1275,8 +1285,15 @@ def store_notification(task_data, event_type, target_user, sender_role):
         cursor = conn.cursor()
 
         notification_id = str(uuid.uuid4())
+        task_id = task_data.get('task_id')
+        if not task_id:
+            logger.error("No task_id found in task_data")
+            return
+
         title = 'Task Updated' if event_type == 'task_updated' else 'New Task Assignment'
         description = f"{task_data['title']} {'updated' if event_type == 'task_updated' else 'assigned'} by {task_data['assigned_by']}"
+
+        logger.info(f"Storing notification - Task ID: {task_id}, Target User: {target_user}")
 
         cursor.execute("""
             INSERT INTO task_notifications (
@@ -1286,7 +1303,7 @@ def store_notification(task_data, event_type, target_user, sender_role):
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             notification_id,
-            task_data['task_id'],
+            task_id,
             title,
             description,
             task_data['assigned_by'],
@@ -1296,10 +1313,11 @@ def store_notification(task_data, event_type, target_user, sender_role):
         ))
 
         conn.commit()
-        logger.info(f"Stored notification: {notification_id}")
+        logger.info(f"Successfully stored notification: {notification_id}")
 
     except Exception as e:
         logger.error(f"Error storing notification: {e}")
+        logger.exception("Full traceback:")
         if conn:
             conn.rollback()
     finally:
