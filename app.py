@@ -10,8 +10,6 @@ import os
 from dotenv import load_dotenv
 import base64
 import io
-import 'package:http/http.dart' as http;
-import 'dart:convert';
 
 # Load environment variables
 load_dotenv()
