@@ -15,50 +15,58 @@ db_config = {
 
 def initialize_firebase():
     try:
+        print("============ FIREBASE INITIALIZATION START ============")
         # First try to get credentials from environment variable
         firebase_creds = os.getenv('FIREBASE_CREDENTIALS')
         if firebase_creds:
             print("Using Firebase credentials from environment variable")
             # Parse the JSON string from environment variable
-            cred_dict = json.loads(firebase_creds)
+            try:
+                cred_dict = json.loads(firebase_creds)
+                print(f"Successfully parsed Firebase credentials JSON from environment")
+            except json.JSONDecodeError as e:
+                print(f"ERROR: Failed to parse Firebase credentials from environment: {e}")
+                raise
             cred = credentials.Certificate(cred_dict)
         else:
             print("Using Firebase credentials from file")
             # Check if file exists
             if not os.path.exists('firebase-credentials.json'):
                 print("ERROR: firebase-credentials.json file not found")
-                # See if we can create a minimal file
-                try:
-                    with open('firebase-credentials.json', 'w') as f:
-                        f.write(json.dumps({
-                            "type": "service_account",
-                            "project_id": os.getenv('FIREBASE_PROJECT_ID', 'taskmanagement'),
-                            # Add other required fields, but this is not a complete solution
-                            "client_email": os.getenv('FIREBASE_CLIENT_EMAIL', ''),
-                            "private_key": os.getenv('FIREBASE_PRIVATE_KEY', '').replace('\\n', '\n')
-                        }))
-                    print("Created firebase-credentials.json from environment variables")
-                except Exception as e:
-                    print(f"Failed to create credentials file: {e}")
-                    raise
+                raise FileNotFoundError("firebase-credentials.json file not found")
             
+            # Try to read and parse the credentials file
+            try:
+                with open('firebase-credentials.json', 'r') as f:
+                    cred_content = f.read()
+                    print(f"Read {len(cred_content)} bytes from credentials file")
+                    json.loads(cred_content)  # Validate JSON format
+                    print("Credentials file contains valid JSON")
+            except Exception as e:
+                print(f"ERROR: Failed to read or parse credentials file: {e}")
+                raise
+                
             cred = credentials.Certificate('firebase-credentials.json')
         
         if not firebase_admin._apps:  # Only initialize if not already initialized
+            print("Initializing Firebase for the first time")
             firebase_admin.initialize_app(cred)
             print("Firebase initialized successfully")
         else:
             print("Firebase was already initialized")
+            print(f"Current Firebase apps: {firebase_admin._apps}")
         
         # Test if we can get a FirebaseMessaging instance
         try:
-            messaging.name
+            print(f"Firebase Messaging module name: {messaging.__name__}")
             print("Firebase Messaging is available")
         except Exception as e:
             print(f"Firebase Messaging test failed: {e}")
         
+        print("============ FIREBASE INITIALIZATION END ============")
     except Exception as e:
-        print(f"Error initializing Firebase: {e}")
+        print(f"ERROR during Firebase initialization: {e}")
+        print("============ FIREBASE INITIALIZATION FAILED ============")
         raise
 
 def get_user_fcm_token(username):
@@ -97,6 +105,9 @@ def send_fcm_notification(task_data, event_type):
     event_type can be: created, updated, deleted, etc.
     """
     try:
+        print(f"============ SENDING NOTIFICATION START - {event_type} ============")
+        print(f"Task data: {task_data}")
+        
         title = f"Task {event_type.replace('_', ' ').title()}"
         
         # Create body message based on available data
@@ -115,6 +126,9 @@ def send_fcm_notification(task_data, event_type):
             if task_data.get('assigned_by'):
                 body += f" by {task_data['assigned_by']}"
             body += f" is {event_type.replace('_', ' ')}."
+
+        print(f"Notification title: {title}")
+        print(f"Notification body: {body}")
 
         # Prepare notification payload
         android_config = messaging.AndroidConfig(
@@ -150,6 +164,7 @@ def send_fcm_notification(task_data, event_type):
         # Try to send to direct FCM token first
         username = task_data.get('assigned_to')
         if username:
+            print(f"Looking up FCM token for user: {username}")
             fcm_token = get_user_fcm_token(username)
             if fcm_token:
                 print(f"Sending direct notification to FCM token for user {username}")
@@ -164,11 +179,24 @@ def send_fcm_notification(task_data, event_type):
                 try:
                     response = messaging.send(message)
                     print(f"FCM notification sent to token: {response}")
+                    print("============ SENDING NOTIFICATION SUCCESS ============")
                     return {"success": True, "message_id": response, "method": "token"}
                 except Exception as e:
-                    print(f"Error sending to token, will try topic: {e}")
+                    print(f"Error sending to token: {e}")
+                    if 'InvalidArgument' in str(e) and 'ValidationError' in str(e):
+                        print("ERROR: FCM token format is invalid")
+                    elif 'NotFound' in str(e):
+                        print("ERROR: FCM token is not registered with Firebase")
+                    elif 'Unavailable' in str(e):
+                        print("ERROR: Firebase messaging service is unavailable")
+                    elif 'Unauthenticated' in str(e):
+                        print("ERROR: Firebase credentials are invalid")
+                    print("Will try topic messaging as fallback")
                     # Fall back to topic messaging
-                    pass
+            else:
+                print(f"No FCM token found for user {username}, falling back to topic")
+        else:
+            print("No username provided in task data, falling back to topic")
         
         # Fall back to topic-based messaging
         topic = task_data.get('assigned_to', 'default_topic')
@@ -185,12 +213,23 @@ def send_fcm_notification(task_data, event_type):
         try:
             response = messaging.send(message)
             print(f"FCM notification sent to topic: {response}")
+            print("============ SENDING NOTIFICATION SUCCESS ============")
             return {"success": True, "message_id": response, "method": "topic"}
         except Exception as e:
             print(f"Error sending FCM notification to topic: {e}")
+            if 'InvalidArgument' in str(e) and 'ValidationError' in str(e):
+                print("ERROR: Topic name format is invalid")
+            elif 'NotFound' in str(e):
+                print("ERROR: Topic does not exist")
+            elif 'Unavailable' in str(e):
+                print("ERROR: Firebase messaging service is unavailable")
+            elif 'Unauthenticated' in str(e):
+                print("ERROR: Firebase credentials are invalid")
+            print("============ SENDING NOTIFICATION FAILED ============")
             return {"success": False, "error": str(e)}
     except Exception as e:
         print(f"Error preparing FCM notification: {e}")
+        print("============ SENDING NOTIFICATION FAILED ============")
         return {"success": False, "error": str(e)}
 
 # Initialize Firebase when the module is imported

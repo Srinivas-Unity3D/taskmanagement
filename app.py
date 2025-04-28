@@ -1242,6 +1242,64 @@ def check_fcm_token(username):
         if conn:
             conn.close()
 
+# ---------------- TEST NOTIFICATION ----------------
+@app.route('/test_notification/<username>', methods=['GET'])
+def test_notification(username):
+    try:
+        # First check if Firebase is initialized
+        is_initialized = bool(firebase_admin._apps)
+        logger.info(f"Firebase initialization status: {is_initialized}")
+        
+        # Get user information
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor(dictionary=True)
+        
+        cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
+        user = cursor.fetchone()
+        
+        if not user:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+        
+        # Create test notification data
+        test_data = {
+            'task_id': 'test_task_123',
+            'title': 'Test Task',
+            'description': 'This is a test notification',
+            'deadline': datetime.now().isoformat(),
+            'priority': 'high',
+            'status': 'pending',
+            'assigned_by': 'admin',
+            'assigned_to': username,
+            'updated_by': 'system'
+        }
+        
+        # Attempt to send notification synchronously (not in thread)
+        logger.info(f"Attempting to send test notification to {username}")
+        result = send_fcm_notification(test_data, 'test')
+        
+        logger.info(f"FCM notification result: {result}")
+        
+        return jsonify({
+            'success': True,
+            'firebase_initialized': is_initialized,
+            'user': {
+                'username': user['username'],
+                'fcm_token': user['fcm_token'],
+                'has_token': user['fcm_token'] is not None and user['fcm_token'] != ''
+            },
+            'notification_result': result
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error testing notification: {str(e)}")
+        logger.exception("Full exception:")
+        return jsonify({'success': False, 'message': f'Error: {str(e)}'}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
 # ---------------- MAIN ----------------
 if __name__ == '__main__':
     # Initialize the application
