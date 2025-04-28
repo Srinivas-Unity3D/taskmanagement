@@ -1,21 +1,22 @@
-from flask import Flask, request, jsonify, send_file, Response
-from flask_cors import CORS
-import mysql.connector
-import uuid
-import logging
-from datetime import datetime
-from flask_socketio import SocketIO, emit
-import json
 import os
-from dotenv import load_dotenv
+import uuid
+import json
+import mysql.connector
+import traceback
+import logging
+import socket
+import time
 import base64
-import io
+from datetime import datetime, timedelta
+from flask import Flask, request, jsonify, send_file
+from flask_socketio import SocketIO, emit
+from flask_cors import CORS
 from google.oauth2 import service_account
-import firebase_admin
-from push_notification import send_fcm_notification
+from push_notification import log_notification_attempt, get_user_fcm_token
 import threading
 import requests
-import traceback
+import io
+from logging.handlers import RotatingFileHandler
 
 # Load environment variables
 load_dotenv()
@@ -476,9 +477,9 @@ def create_task():
 
         # After task creation logic
         notify_task_update(data, event_type='task_created')
-        # Call FCM notification function
+        # Call notification logging function
         threading.Thread(
-            target=send_fcm_notification,
+            target=log_notification_attempt,
             args=(data, 'created')
         ).start()
 
@@ -986,25 +987,12 @@ def update_task(task_id):
 
         conn.commit()
 
-        # Prepare notification data with complete task information
-        notification_data = {
-            'task_id': updated_task['task_id'],
-            'title': updated_task['title'],
-            'description': updated_task['description'],
-            'deadline': updated_task['deadline'].isoformat() if updated_task['deadline'] else None,
-            'priority': updated_task['priority'],
-            'status': updated_task['status'],
-            'assigned_by': updated_task['assigned_by'],
-            'assigned_to': updated_task['assigned_to'],
-            'updated_by': updated_by
-        }
-
-        # After task update logic
-        notify_task_update(notification_data, event_type='task_updated')
-        # Call FCM notification function
+        # Notify clients and send push notification
+        notify_task_update(updated_task, event_type='task_updated')
+        # Log notification attempt
         threading.Thread(
-            target=send_fcm_notification,
-            args=(notification_data, 'updated')
+            target=log_notification_attempt,
+            args=(updated_task, 'updated')
         ).start()
 
         return jsonify({
@@ -1277,7 +1265,7 @@ def test_notification(username):
         
         # Attempt to send notification synchronously (not in thread)
         logger.info(f"Attempting to send test notification to {username}")
-        result = send_fcm_notification(test_data, 'test')
+        result = log_notification_attempt(test_data, 'test')
         
         logger.info(f"FCM notification result: {result}")
         
@@ -1319,7 +1307,7 @@ def test_fcm_direct(username):
         fcm_token = user['fcm_token']
         
         # Import module here to avoid circular imports
-        from push_notification import send_fcm_notification
+        from push_notification import log_notification_attempt
         
         # Create test notification data
         test_data = {
@@ -1334,9 +1322,9 @@ def test_fcm_direct(username):
             'updated_by': 'system'
         }
         
-        # Use the Firebase Admin SDK to send the notification
-        logger.info(f"Sending test notification to {username} with token: {fcm_token[:10]}...{fcm_token[-5:]}")
-        result = send_fcm_notification(test_data, 'test')
+        # Log the notification attempt
+        logger.info(f"Logging test notification for {username} with token: {fcm_token[:10]}...{fcm_token[-5:]}")
+        result = log_notification_attempt(test_data, 'test')
         logger.info(f"Notification result: {result}")
         
         return jsonify({
@@ -1359,23 +1347,11 @@ def test_fcm_direct(username):
 @app.route('/test_firebase', methods=['GET'])
 def test_firebase():
     try:
-        # Check if Firebase is initialized
-        is_initialized = bool(firebase_admin._apps)
-        
-        # Get Firebase app details
-        app_details = {}
-        if is_initialized and firebase_admin._apps:
-            app = firebase_admin._apps[None]
-            app_details = {
-                'name': app.name,
-                'options': str(app._options)
-            }
-        
-        # Create test notification data
+        # Create simple response without requiring Firebase
         test_data = {
             'task_id': 'test123',
             'title': 'Test Notification',
-            'description': 'Testing Firebase Cloud Messaging',
+            'description': 'Testing notification system',
             'assigned_to': 'admin',
             'assigned_by': 'system',
             'deadline': datetime.now().isoformat(),
@@ -1383,16 +1359,14 @@ def test_firebase():
             'status': 'pending'
         }
         
-        # Try to send a test notification
-        notification_result = send_fcm_notification(test_data, 'test')
+        # Use the modified function from push_notification.py
+        notification_result = log_notification_attempt(test_data, 'test')
         
         return jsonify({
             'success': True,
-            'firebase_initialized': is_initialized,
-            'firebase_app': app_details,
+            'message': 'Client-side Firebase notification approach is active',
             'notification_result': notification_result,
-            'credentials_file_exists': os.path.exists('firebase-credentials.json'),
-            'credentials_file_size': os.path.getsize('firebase-credentials.json') if os.path.exists('firebase-credentials.json') else 0
+            'credentials_required': False
         }), 200
         
     except Exception as e:
@@ -1401,6 +1375,108 @@ def test_firebase():
             'error': str(e),
             'traceback': traceback.format_exc()
         }), 500
+
+# ---------------- SEND NOTIFICATION ----------------
+@app.route('/send_notification', methods=['POST'])
+def send_notification():
+    try:
+        data = request.get_json()
+        username = data.get('username')
+        title = data.get('title')
+        body = data.get('body')
+        payload = data.get('payload', {})
+        
+        if not all([username, title, body]):
+            return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+            
+        # Get user's FCM token
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT fcm_token FROM users WHERE username = %s", (username,))
+        user = cursor.fetchone()
+        
+        if not user or not user['fcm_token']:
+            return jsonify({'success': False, 'message': 'User has no FCM token'}), 404
+        
+        # Return the token for client to use
+        return jsonify({
+            'success': True,
+            'fcm_token': user['fcm_token'],
+            'notification': {
+                'title': title,
+                'body': body,
+                'data': payload
+            }
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error in send_notification: {str(e)}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+# Add this endpoint after the send_notification endpoint
+@app.route('/test_client_notification/<username>', methods=['GET'])
+def test_client_notification(username):
+    try:
+        # Get user information
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor(dictionary=True)
+        
+        cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
+        user = cursor.fetchone()
+        
+        if not user:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+        
+        # Create test notification data
+        test_data = {
+            'task_id': 'test_task_123',
+            'title': 'Test Client Notification',
+            'description': 'This is a test notification using client-side approach',
+            'assigned_to': username,
+            'assigned_by': 'system',
+            'deadline': datetime.now().isoformat(),
+            'priority': 'high',
+            'status': 'pending'
+        }
+        
+        # Get the FCM token
+        fcm_token = user.get('fcm_token')
+        
+        if not fcm_token:
+            return jsonify({
+                'success': False,
+                'message': 'User has no FCM token registered'
+            }), 400
+        
+        # Prepare notification data for client
+        notification_data = {
+            'success': True,
+            'fcm_token': fcm_token,
+            'notification': {
+                'title': 'Test Notification',
+                'body': f'Hello {username}, this is a test notification!',
+                'data': {
+                    'task_id': 'test_task_123',
+                    'click_action': 'FLUTTER_NOTIFICATION_CLICK',
+                    'type': 'test'
+                }
+            }
+        }
+        
+        return jsonify(notification_data), 200
+        
+    except Exception as e:
+        logger.error(f"Error in test_client_notification: {str(e)}")
+        logger.exception("Full exception:")
+        return jsonify({'success': False, 'message': f'Error: {str(e)}'}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 # ---------------- MAIN ----------------
 if __name__ == '__main__':

@@ -1,7 +1,4 @@
-import firebase_admin
-from firebase_admin import messaging, credentials
 import os
-import json
 import mysql.connector
 from datetime import datetime
 
@@ -12,79 +9,6 @@ db_config = {
     'password': os.getenv('DB_PASSWORD', '123'),
     'database': os.getenv('DB_NAME', 'task_db')
 }
-
-def initialize_firebase():
-    try:
-        print("============ FIREBASE INITIALIZATION START ============")
-        # First try to get credentials from environment variable
-        firebase_creds = os.getenv('FIREBASE_CREDENTIALS')
-        if firebase_creds:
-            print("Using Firebase credentials from environment variable")
-            # Parse the JSON string from environment variable
-            try:
-                cred_dict = json.loads(firebase_creds)
-                print(f"Successfully parsed Firebase credentials JSON from environment")
-                # Validate service account credentials
-                required_fields = ['type', 'project_id', 'private_key_id', 'private_key', 'client_email']
-                missing_fields = [field for field in required_fields if field not in cred_dict]
-                if missing_fields:
-                    print(f"WARNING: Service account credentials missing fields: {missing_fields}")
-                else:
-                    print(f"Service account credentials validated for project: {cred_dict['project_id']}")
-                    print(f"Using service account email: {cred_dict['client_email']}")
-            except json.JSONDecodeError as e:
-                print(f"ERROR: Failed to parse Firebase credentials from environment: {e}")
-                raise
-            cred = credentials.Certificate(cred_dict)
-        else:
-            print("Using Firebase credentials from file")
-            # Check if file exists
-            if not os.path.exists('firebase-credentials.json'):
-                print("ERROR: firebase-credentials.json file not found")
-                raise FileNotFoundError("firebase-credentials.json file not found. Please download the service account JSON file from Firebase Console and save it as 'firebase-credentials.json'")
-            
-            # Try to read and parse the credentials file
-            try:
-                with open('firebase-credentials.json', 'r') as f:
-                    cred_content = f.read()
-                    print(f"Read {len(cred_content)} bytes from credentials file")
-                    cred_dict = json.loads(cred_content)  # Validate JSON format
-                    print("Credentials file contains valid JSON")
-                    
-                    # Validate service account credentials
-                    required_fields = ['type', 'project_id', 'private_key_id', 'private_key', 'client_email']
-                    missing_fields = [field for field in required_fields if field not in cred_dict]
-                    if missing_fields:
-                        print(f"WARNING: Service account credentials missing fields: {missing_fields}")
-                    else:
-                        print(f"Service account credentials validated for project: {cred_dict['project_id']}")
-                        print(f"Using service account email: {cred_dict['client_email']}")
-            except Exception as e:
-                print(f"ERROR: Failed to read or parse credentials file: {e}")
-                raise
-                
-            cred = credentials.Certificate('firebase-credentials.json')
-        
-        if not firebase_admin._apps:  # Only initialize if not already initialized
-            print("Initializing Firebase for the first time")
-            firebase_admin.initialize_app(cred)
-            print("Firebase initialized successfully")
-        else:
-            print("Firebase was already initialized")
-            print(f"Current Firebase apps: {firebase_admin._apps}")
-        
-        # Test if we can get a FirebaseMessaging instance
-        try:
-            print(f"Firebase Messaging module name: {messaging.__name__}")
-            print("Firebase Messaging is available")
-        except Exception as e:
-            print(f"Firebase Messaging test failed: {e}")
-        
-        print("============ FIREBASE INITIALIZATION END ============")
-    except Exception as e:
-        print(f"ERROR during Firebase initialization: {e}")
-        print("============ FIREBASE INITIALIZATION FAILED ============")
-        raise
 
 def validate_fcm_token(token):
     """Validates and cleans a FCM token"""
@@ -144,14 +68,16 @@ def get_user_fcm_token(username):
         if conn:
             conn.close()
 
-def send_fcm_notification(task_data, event_type):
+# This function now just logs info and returns a response,
+# but doesn't actually send notifications from the server
+def log_notification_attempt(task_data, event_type):
     """
-    Send FCM notification for task events
+    Log information about notification attempts
     task_data should contain: title, assigned_to, assigned_by
     event_type can be: created, updated, deleted, etc.
     """
     try:
-        print(f"============ SENDING NOTIFICATION START - {event_type} ============")
+        print(f"============ NOTIFICATION LOG - {event_type} ============")
         print(f"Task data: {task_data}")
         
         title = f"Task {event_type.replace('_', ' ').title()}"
@@ -184,81 +110,29 @@ def send_fcm_notification(task_data, event_type):
             'timestamp': datetime.now().isoformat()
         }
         
-        # Try to send to direct FCM token first
+        # Get username
         username = task_data.get('assigned_to')
         if username:
             print(f"Looking up FCM token for user: {username}")
             fcm_token = get_user_fcm_token(username)
             if fcm_token:
-                print(f"Sending direct notification to FCM token for user {username}")
-                
-                # Create a simpler message structure
-                message = messaging.Message(
-                    notification=messaging.Notification(
-                        title=title,
-                        body=body,
-                    ),
-                    data=data_payload,
-                    token=fcm_token,
-                )
-                
-                try:
-                    response = messaging.send(message)
-                    print(f"FCM notification sent to token: {response}")
-                    print("============ SENDING NOTIFICATION SUCCESS ============")
-                    return {"success": True, "message_id": response, "method": "token"}
-                except Exception as e:
-                    print(f"Error sending to token: {e}")
-                    if 'InvalidArgument' in str(e) and 'ValidationError' in str(e):
-                        print("ERROR: FCM token format is invalid")
-                    elif 'NotFound' in str(e):
-                        print("ERROR: FCM token is not registered with Firebase")
-                    elif 'Unavailable' in str(e):
-                        print("ERROR: Firebase messaging service is unavailable")
-                    elif 'Unauthenticated' in str(e):
-                        print("ERROR: Firebase credentials are invalid")
-                    print("Will try topic messaging as fallback")
-                    # Fall back to topic messaging
+                print(f"FCM token available for user {username}")
+                print("Use client-side notification approach")
+                return {
+                    "success": True, 
+                    "message": "Notification info logged (client-side sending)",
+                    "fcm_token": fcm_token
+                }
             else:
-                print(f"No FCM token found for user {username}, falling back to topic")
+                print(f"No FCM token found for user {username}")
         else:
-            print("No username provided in task data, falling back to topic")
+            print("No username provided in task data")
         
-        # Fall back to topic-based messaging
-        topic = task_data.get('assigned_to', 'default_topic')
-        print(f"Sending notification to topic: {topic}")
-        
-        # Create a simpler topic message
-        message = messaging.Message(
-            notification=messaging.Notification(
-                title=title,
-                body=body,
-            ),
-            data=data_payload,
-            topic=topic,
-        )
-
-        try:
-            response = messaging.send(message)
-            print(f"FCM notification sent to topic: {response}")
-            print("============ SENDING NOTIFICATION SUCCESS ============")
-            return {"success": True, "message_id": response, "method": "topic"}
-        except Exception as e:
-            print(f"Error sending FCM notification to topic: {e}")
-            if 'InvalidArgument' in str(e) and 'ValidationError' in str(e):
-                print("ERROR: Topic name format is invalid")
-            elif 'NotFound' in str(e):
-                print("ERROR: Topic does not exist")
-            elif 'Unavailable' in str(e):
-                print("ERROR: Firebase messaging service is unavailable")
-            elif 'Unauthenticated' in str(e):
-                print("ERROR: Firebase credentials are invalid")
-            print("============ SENDING NOTIFICATION FAILED ============")
-            return {"success": False, "error": str(e)}
+        print("============ NOTIFICATION LOG END ============")
+        return {"success": False, "message": "No FCM token available"}
     except Exception as e:
-        print(f"Error preparing FCM notification: {e}")
-        print("============ SENDING NOTIFICATION FAILED ============")
+        print(f"Error logging notification: {e}")
+        print("============ NOTIFICATION LOG FAILED ============")
         return {"success": False, "error": str(e)}
 
-# Initialize Firebase when the module is imported
-initialize_firebase() 
+print("Simplified notification module loaded successfully") 
