@@ -10,6 +10,8 @@ import os
 from dotenv import load_dotenv
 import base64
 import io
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 
 # Load environment variables
 load_dotenv()
@@ -72,27 +74,42 @@ def notify_task_update(task_data, event_type='task_update'):
     try:
         logger.info(f"Notifying task update - Type: {event_type}, Task: {task_data}")
         
-        # Get the assigned user's socket ID
+        # Get the assigned user's socket ID and role
         assigned_to = task_data.get('assigned_to')
         assigned_by = task_data.get('assigned_by')
         
-        # Notify the assigned user
-        if assigned_to in connected_users:
-            logger.info(f"Sending notification to assigned user: {assigned_to}")
-            socketio.emit('task_notification', {
-                'type': event_type,
-                'task': task_data
-            }, room=connected_users[assigned_to])
-        else:
-            logger.info(f"Assigned user not connected: {assigned_to}")
+        # Get sender's role
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT role FROM users WHERE username = %s", (assigned_by,))
+        sender = cursor.fetchone()
+        sender_role = sender['role'] if sender else 'Unknown'
+        
+        # Store notification for assigned user
+        if assigned_to:
+            store_notification(task_data, event_type, assigned_to, sender_role)
+            
+            # Send real-time notification if user is connected
+            if assigned_to in connected_users:
+                logger.info(f"Sending notification to assigned user: {assigned_to}")
+                socketio.emit('task_notification', {
+                    'type': event_type,
+                    'task': task_data
+                }, room=connected_users[assigned_to])
+            else:
+                logger.info(f"Assigned user not connected: {assigned_to}")
 
-        # Notify the assigner if different from assignee
-        if assigned_by and assigned_by != assigned_to and assigned_by in connected_users:
-            logger.info(f"Sending notification to assigner: {assigned_by}")
-            socketio.emit('task_notification', {
-                'type': event_type,
-                'task': task_data
-            }, room=connected_users[assigned_by])
+        # Store notification for assigner if different from assignee
+        if assigned_by and assigned_by != assigned_to:
+            store_notification(task_data, event_type, assigned_by, sender_role)
+            
+            # Send real-time notification if user is connected
+            if assigned_by in connected_users:
+                logger.info(f"Sending notification to assigner: {assigned_by}")
+                socketio.emit('task_notification', {
+                    'type': event_type,
+                    'task': task_data
+                }, room=connected_users[assigned_by])
 
         # Broadcast dashboard update to all connected users
         logger.info("Broadcasting dashboard update to all users")
@@ -105,6 +122,11 @@ def notify_task_update(task_data, event_type='task_update'):
     except Exception as e:
         logger.error(f"Error in notify_task_update: {e}")
         logger.exception("Full traceback:")
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 # Create database tables if they don't exist
 def init_db():
@@ -147,6 +169,25 @@ def init_db():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 FOREIGN KEY (assigned_by) REFERENCES users(username) ON DELETE CASCADE ON UPDATE CASCADE,
                 FOREIGN KEY (assigned_to) REFERENCES users(username) ON DELETE CASCADE ON UPDATE CASCADE
+            )
+        """)
+
+        # Create task_notifications table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS task_notifications (
+                id VARCHAR(36) PRIMARY KEY,
+                task_id VARCHAR(36) NOT NULL,
+                title VARCHAR(255) NOT NULL,
+                description TEXT,
+                sender_name VARCHAR(100) NOT NULL,
+                sender_role VARCHAR(50) NOT NULL,
+                type VARCHAR(50) NOT NULL,
+                is_read BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                target_user VARCHAR(100) NOT NULL,
+                FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE ON UPDATE CASCADE,
+                FOREIGN KEY (sender_name) REFERENCES users(username) ON DELETE CASCADE ON UPDATE CASCADE,
+                FOREIGN KEY (target_user) REFERENCES users(username) ON DELETE CASCADE ON UPDATE CASCADE
             )
         """)
 
@@ -1152,6 +1193,117 @@ def mark_notification_read(notification_id):
         if conn:
             conn.rollback()
         return jsonify({'success': False, 'message': str(e)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+# ---------------- GET NOTIFICATIONS ----------------
+@app.route('/tasks/notifications', methods=['GET'])
+def get_notifications():
+    try:
+        # Get query parameters
+        user_id = request.args.get('user_id')
+        username = request.args.get('username')
+
+        if not user_id or not username:
+            return jsonify({
+                'success': False,
+                'message': 'Missing user_id or username parameter'
+            }), 400
+
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor(dictionary=True)
+
+        # Get user's role
+        cursor.execute("SELECT role FROM users WHERE user_id = %s", (user_id,))
+        user = cursor.fetchone()
+        if not user:
+            return jsonify({
+                'success': False,
+                'message': 'User not found'
+            }), 404
+
+        # Get notifications for the user
+        cursor.execute("""
+            SELECT 
+                n.id,
+                n.task_id,
+                n.title,
+                n.description,
+                n.sender_name,
+                n.sender_role,
+                n.type,
+                n.is_read,
+                n.created_at,
+                t.priority,
+                t.status
+            FROM task_notifications n
+            JOIN tasks t ON n.task_id = t.task_id
+            WHERE n.target_user = %s
+            ORDER BY n.created_at DESC
+            LIMIT 50
+        """, (username,))
+
+        notifications = cursor.fetchall()
+
+        # Format timestamps
+        for notification in notifications:
+            if notification['created_at']:
+                notification['created_at'] = notification['created_at'].isoformat()
+
+        return jsonify({
+            'success': True,
+            'notifications': notifications
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error fetching notifications: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+def store_notification(task_data, event_type, target_user, sender_role):
+    """Store notification in database"""
+    try:
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor()
+
+        notification_id = str(uuid.uuid4())
+        title = 'Task Updated' if event_type == 'task_updated' else 'New Task Assignment'
+        description = f"{task_data['title']} {'updated' if event_type == 'task_updated' else 'assigned'} by {task_data['assigned_by']}"
+
+        cursor.execute("""
+            INSERT INTO task_notifications (
+                id, task_id, title, description, sender_name,
+                sender_role, type, target_user
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            notification_id,
+            task_data['task_id'],
+            title,
+            description,
+            task_data['assigned_by'],
+            sender_role,
+            'task',
+            target_user
+        ))
+
+        conn.commit()
+        logger.info(f"Stored notification: {notification_id}")
+
+    except Exception as e:
+        logger.error(f"Error storing notification: {e}")
+        if conn:
+            conn.rollback()
     finally:
         if cursor:
             cursor.close()
