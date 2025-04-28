@@ -181,6 +181,10 @@ def init_db():
                 sender_role VARCHAR(50) NOT NULL,
                 type VARCHAR(50) NOT NULL,
                 is_read BOOLEAN DEFAULT FALSE,
+                status VARCHAR(50) DEFAULT 'active',
+                snooze_until DATETIME,
+                snooze_reason TEXT,
+                snooze_audio LONGTEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 target_user VARCHAR(100) NOT NULL,
                 FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE ON UPDATE CASCADE,
@@ -1329,6 +1333,8 @@ def store_notification(task_data, event_type, target_user, sender_role):
 # ---------------- SNOOZE NOTIFICATION ----------------
 @app.route('/notifications/snooze', methods=['POST'])
 def snooze_notification():
+    conn = None
+    cursor = None
     try:
         data = request.get_json()
         notification_id = data.get('notification_id')
@@ -1336,26 +1342,46 @@ def snooze_notification():
         reason = data.get('reason')
         audio_note = data.get('audio_note')
         
+        if not notification_id or not snooze_until:
+            return jsonify({
+                'success': False,
+                'message': 'Missing required fields: notification_id and snooze_until'
+            }), 400
+        
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor()
         
-        # Update notification status
+        # Update notification status and snooze details
         cursor.execute("""
             UPDATE task_notifications 
             SET status = 'snoozed',
                 snooze_until = %s,
                 snooze_reason = %s,
-                snooze_audio = %s
+                snooze_audio = %s,
+                is_read = FALSE
             WHERE id = %s
         """, (snooze_until, reason, audio_note, notification_id))
         
+        if cursor.rowcount == 0:
+            return jsonify({
+                'success': False,
+                'message': 'Notification not found'
+            }), 404
+        
         conn.commit()
-        return jsonify({'success': True, 'message': 'Notification snoozed'})
+        return jsonify({
+            'success': True,
+            'message': 'Notification snoozed successfully'
+        })
         
     except Exception as e:
+        logger.error(f"Error snoozing notification: {str(e)}")
         if conn:
             conn.rollback()
-        return jsonify({'success': False, 'message': str(e)}), 500
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500
     finally:
         if cursor:
             cursor.close()
