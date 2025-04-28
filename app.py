@@ -53,62 +53,87 @@ db_config = {
     'database': os.getenv('DB_NAME', 'task_db')
 }
 
-# Store connected users
+# Store connected users and their socket IDs
 connected_users = {}
 
 @socketio.on('connect')
 def handle_connect():
-    logger.info(f"Client connected: {request.sid}")
-    socketio.emit('connect_response', {'status': 'connected', 'sid': request.sid}, room=request.sid)
+    logger.info('Client connected')
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    user = next((username for username, sid in connected_users.items() if sid == request.sid), None)
-    if user:
-        del connected_users[user]
-        logger.info(f"Client disconnected: {user} ({request.sid})")
-    else:
-        logger.info(f"Unknown client disconnected: {request.sid}")
+    logger.info('Client disconnected')
+    # Remove user from connected_users when they disconnect
+    for username, user_data in list(connected_users.items()):
+        if user_data['socket_id'] == request.sid:
+            del connected_users[username]
+            logger.info(f'User {username} disconnected')
+            break
 
 @socketio.on('register')
-def handle_register(username):
-    connected_users[username] = request.sid
-    logger.info(f"User registered: {username} ({request.sid})")
-    socketio.emit('register_response', {'status': 'registered', 'username': username}, room=request.sid)
+def handle_register(data):
+    """Register a user with their socket ID and device info"""
+    try:
+        username = data.get('username')
+        device_id = data.get('device_id')
+        
+        if not username:
+            logger.error('No username provided in registration')
+            return
+        
+        logger.info(f'Registering user: {username} with device: {device_id}')
+        
+        # Store user's socket ID and device info
+        connected_users[username] = {
+            'socket_id': request.sid,
+            'device_id': device_id
+        }
+        
+        logger.info(f'User {username} registered successfully')
+        logger.info(f'Current connected users: {connected_users}')
+    except Exception as e:
+        logger.error(f'Error in handle_register: {e}')
+        logger.exception('Full traceback:')
 
 def notify_task_update(task_data, event_type='task_update'):
     """Notify relevant users about task updates"""
     try:
         logger.info(f"Notifying task update - Type: {event_type}, Task: {task_data}")
         
-        # Get the assigned user's socket ID
+        # Get the assigned user's socket ID and device info
         assigned_to = task_data.get('assigned_to')
         assigned_by = task_data.get('assigned_by')
+        updated_by = task_data.get('updated_by')
+        
+        # Get the sender's device info
+        sender_device = None
+        if assigned_by in connected_users:
+            sender_device = connected_users[assigned_by].get('device_id')
+        
+        # Prepare notification data with device info
+        notification_data = {
+            'type': event_type,
+            'task': task_data,
+            'sender_device': sender_device
+        }
         
         # Notify the assigned user
         if assigned_to in connected_users:
             logger.info(f"Sending notification to assigned user: {assigned_to}")
-            socketio.emit('task_notification', {
-                'type': event_type,
-                'task': task_data
-            }, room=connected_users[assigned_to])
+            socketio.emit('task_notification', notification_data, 
+                         room=connected_users[assigned_to]['socket_id'])
         else:
             logger.info(f"Assigned user not connected: {assigned_to}")
 
         # Notify the assigner if different from assignee
         if assigned_by and assigned_by != assigned_to and assigned_by in connected_users:
             logger.info(f"Sending notification to assigner: {assigned_by}")
-            socketio.emit('task_notification', {
-                'type': event_type,
-                'task': task_data
-            }, room=connected_users[assigned_by])
+            socketio.emit('task_notification', notification_data, 
+                         room=connected_users[assigned_by]['socket_id'])
 
         # Broadcast dashboard update to all connected users
         logger.info("Broadcasting dashboard update to all users")
-        socketio.emit('dashboard_update', {
-            'type': event_type,
-            'task': task_data
-        }, broadcast=True)
+        socketio.emit('dashboard_update', notification_data, broadcast=True)
         
         logger.info("Notification sent successfully")
     except Exception as e:
