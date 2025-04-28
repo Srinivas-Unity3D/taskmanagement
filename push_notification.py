@@ -66,6 +66,7 @@ def get_user_fcm_token(username):
     conn = None
     cursor = None
     try:
+        print(f"Attempting to get FCM token for user: {username}")
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor(dictionary=True)
         
@@ -73,7 +74,12 @@ def get_user_fcm_token(username):
         user = cursor.fetchone()
         
         if user and user['fcm_token']:
-            return user['fcm_token']
+            token = user['fcm_token']
+            masked_token = token[:10] + "..." + token[-5:] if len(token) > 15 else token
+            print(f"Found FCM token for user {username}: {masked_token}")
+            return token
+        
+        print(f"No FCM token found for user {username}")
         return None
     except Exception as e:
         print(f"Error getting FCM token: {e}")

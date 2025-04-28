@@ -1209,6 +1209,39 @@ def update_fcm_token():
         if conn:
             conn.close()
 
+# ---------------- CHECK FCM TOKEN ----------------
+@app.route('/check_fcm_token/<username>', methods=['GET'])
+def check_fcm_token(username):
+    conn = None
+    cursor = None
+    try:
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor(dictionary=True)
+        
+        # Query the user's FCM token
+        cursor.execute("SELECT fcm_token FROM users WHERE username = %s", (username,))
+        user = cursor.fetchone()
+        
+        if not user:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+            
+        return jsonify({
+            'success': True, 
+            'username': username,
+            'fcm_token': user['fcm_token'],
+            'has_token': user['fcm_token'] is not None and user['fcm_token'] != ''
+        }), 200
+    
+    except Exception as e:
+        logger.error(f"Error checking FCM token: {str(e)}")
+        return jsonify({'success': False, 'message': f'Error: {str(e)}'}), 500
+    
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
 # ---------------- MAIN ----------------
 if __name__ == '__main__':
     # Initialize the application
