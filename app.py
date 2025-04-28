@@ -417,80 +417,122 @@ def login():
 # ---------------- CREATE TASK ----------------
 @app.route('/api/tasks', methods=['POST'])
 def create_task():
+    conn = None
+    cursor = None
     try:
         data = request.get_json()
+        logger.info(f"Creating new task: {data}")
+        
+        # Extract task data
+        task_id = str(uuid.uuid4())
         title = data.get('title')
         description = data.get('description')
-        assignee = data.get('assignee')
+        assigned_to = data.get('assigned_to')
+        assigned_by = data.get('assigned_by')
         deadline = data.get('deadline')
         priority = data.get('priority')
-        status = data.get('status')
+        status = data.get('status', 'pending')
         audio_note = data.get('audio_note')
         attachments = data.get('attachments', [])
         alarm_settings = data.get('alarm_settings')
-        created_by = data.get('created_by')
+
+        # Validate required fields
+        if not all([title, assigned_to, assigned_by, deadline, priority]):
+            return jsonify({
+                'success': False,
+                'message': 'Missing required fields'
+            }), 400
 
         conn = mysql.connector.connect(**db_config)
-        cursor = conn.cursor()
+        cursor = conn.cursor(dictionary=True)
 
         # Insert task
         cursor.execute("""
-            INSERT INTO tasks (title, description, assignee, deadline, priority, status, created_by)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """, (title, description, assignee, deadline, priority, status, created_by))
+            INSERT INTO tasks (task_id, title, description, assigned_to, assigned_by, deadline, priority, status)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """, (task_id, title, description, assigned_to, assigned_by, deadline, priority, status))
         
-        task_id = cursor.lastrowid
-
         # Handle audio note
         if audio_note:
+            audio_id = str(uuid.uuid4())
             audio_data = base64.b64decode(audio_note.get('data', ''))
             audio_duration = audio_note.get('duration', 0)
             file_name = audio_note.get('file_name', 'voice_note.wav')
             
             cursor.execute("""
-                INSERT INTO task_audio_notes (task_id, audio_data, duration, created_by, file_name)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (task_id, audio_data, audio_duration, created_by, file_name))
+                INSERT INTO task_audio_notes (audio_id, task_id, audio_data, duration, created_by, file_name)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (audio_id, task_id, audio_data, audio_duration, assigned_by, file_name))
 
         # Handle attachments
         for attachment in attachments:
+            attachment_id = str(uuid.uuid4())
             file_data = base64.b64decode(attachment.get('data', ''))
             file_name = attachment.get('name', 'unnamed_file')
             file_type = attachment.get('type', 'application/octet-stream')
             file_size = attachment.get('size', 0)
             
             cursor.execute("""
-                INSERT INTO task_attachments (task_id, file_data, file_name, file_type, file_size, created_by)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """, (task_id, file_data, file_name, file_type, file_size, created_by))
+                INSERT INTO task_attachments (attachment_id, task_id, file_data, file_name, file_type, file_size, created_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (attachment_id, task_id, file_data, file_name, file_type, file_size, assigned_by))
 
         # Handle alarm settings
         if alarm_settings:
-            alarm_time = alarm_settings.get('alarm_time')
-            alarm_type = alarm_settings.get('alarm_type')
+            start_date = alarm_settings.get('start_date')
+            start_time = alarm_settings.get('start_time')
+            frequency = alarm_settings.get('frequency')
             
             cursor.execute("""
-                INSERT INTO task_alarms (task_id, alarm_time, alarm_type)
-                VALUES (%s, %s, %s)
-            """, (task_id, alarm_time, alarm_type))
+                UPDATE tasks
+                SET start_date = %s, start_time = %s, frequency = %s
+                WHERE task_id = %s
+            """, (start_date, start_time, frequency, task_id))
 
+        # Get the created task for notification
+        cursor.execute("""
+            SELECT task_id, title, description, deadline, priority, status, assigned_by, assigned_to, created_at, updated_at
+            FROM tasks 
+            WHERE task_id = %s
+        """, (task_id,))
+        created_task = cursor.fetchone()
+        
         conn.commit()
 
-        # After task creation logic
-        notify_task_update(data, event_type='task_created')
-        # Call notification logging function
-        threading.Thread(
-            target=log_notification_attempt,
-            args=(data, 'created')
-        ).start()
+        # Add task_id to the original data for notification purposes
+        data['task_id'] = task_id
+        
+        # After task creation, notify users via WebSocket
+        notify_task_update(created_task, event_type='task_created')
+        
+        # Process FCM notification in background thread
+        from push_notification import log_notification_attempt
+        notification_result = log_notification_attempt(created_task, 'created')
+        
+        # If FCM token is available, add notification details to response
+        fcm_data = None
+        if notification_result.get('success') and notification_result.get('fcm_token'):
+            fcm_data = {
+                'fcm_token': notification_result.get('fcm_token'),
+                'notification': notification_result.get('notification')
+            }
 
-        return jsonify({'message': 'Task created successfully', 'task_id': task_id}), 201
+        return jsonify({
+            'success': True,
+            'message': 'Task created successfully',
+            'task_id': task_id,
+            'fcm_data': fcm_data
+        }), 201
 
     except Exception as e:
         logger.error(f"Error creating task: {str(e)}")
+        logger.exception("Full traceback:")
         if conn:
             conn.rollback()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({
+            'success': False,
+            'message': f"Error creating task: {str(e)}"
+        }), 500
     finally:
         if cursor:
             cursor.close()
@@ -853,8 +895,11 @@ def get_task_assignments(user_id):
 # ---------------- UPDATE TASK ----------------
 @app.route('/tasks/<task_id>', methods=['PUT'])
 def update_task(task_id):
+    conn = None
+    cursor = None
     try:
         data = request.get_json()
+        logger.info(f"Updating task {task_id}: {data}")
         
         # Validate required fields
         required_fields = ['priority', 'status', 'deadline', 'updated_by']
@@ -906,7 +951,7 @@ def update_task(task_id):
         # Update task
         cursor.execute("""
             UPDATE tasks 
-            SET priority = %s, status = %s, deadline = %s
+            SET priority = %s, status = %s, deadline = %s, updated_at = CURRENT_TIMESTAMP
             WHERE task_id = %s
         """, (priority, status, deadline, task_id))
 
@@ -922,15 +967,16 @@ def update_task(task_id):
             audio_id = str(uuid.uuid4())
             cursor.execute("""
                 INSERT INTO task_audio_notes (
-                    audio_id, task_id, audio_data, duration, created_by
+                    audio_id, task_id, audio_data, duration, created_by, file_name
                 )
-                VALUES (%s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s)
             """, (
                 audio_id,
                 task_id,
                 audio_note.get('audio_data'),
                 audio_note.get('duration', 0),
-                updated_by
+                updated_by,
+                audio_note.get('file_name', 'voice_note.wav')
             ))
 
         # Handle attachments if provided
@@ -985,25 +1031,37 @@ def update_task(task_id):
             WHERE task_id = %s
         """, (task_id,))
         updated_task = cursor.fetchone()
+        
+        # Add the updated_by field to the task data for notification purposes
+        updated_task['updated_by'] = updated_by
 
         conn.commit()
 
-        # Notify clients and send push notification
+        # Notify clients via WebSocket
         notify_task_update(updated_task, event_type='task_updated')
-        # Log notification attempt
-        threading.Thread(
-            target=log_notification_attempt,
-            args=(updated_task, 'updated')
-        ).start()
+        
+        # Process FCM notification
+        from push_notification import log_notification_attempt
+        notification_result = log_notification_attempt(updated_task, 'updated')
+        
+        # If FCM token is available, add notification details to response
+        fcm_data = None
+        if notification_result.get('success') and notification_result.get('fcm_token'):
+            fcm_data = {
+                'fcm_token': notification_result.get('fcm_token'),
+                'notification': notification_result.get('notification')
+            }
 
         return jsonify({
             'success': True,
             'message': 'Task updated successfully',
-            'task_id': task_id
+            'task_id': task_id,
+            'fcm_data': fcm_data
         }), 200
 
     except mysql.connector.Error as db_err:
         logger.error(f"Database error in update_task: {db_err}")
+        logger.exception("Full traceback:")
         if conn:
             conn.rollback()
         return jsonify({
@@ -1014,6 +1072,7 @@ def update_task(task_id):
 
     except Exception as e:
         logger.error(f"Error updating task: {str(e)}")
+        logger.exception("Full traceback:")
         if conn:
             conn.rollback()
         return jsonify({
@@ -1478,6 +1537,35 @@ def test_client_notification(username):
             cursor.close()
         if conn:
             conn.close()
+
+# ---------------- FIREBASE TOKEN ----------------
+@app.route('/firebase_token', methods=['GET'])
+def get_firebase_token():
+    """
+    Provides a Firebase OAuth token for clients to use with FCM
+    This is a simplified approach - in production you would implement
+    proper OAuth token generation using service account credentials
+    """
+    try:
+        # In a real implementation, you would generate this token using
+        # the Firebase Admin SDK or a similar authenticated service
+        
+        # For development purposes, returning a static token with short expiry
+        # In production, implement proper OAuth2 flow with your Firebase service account
+        dummy_token = "ya29.c.b0AXv0zTP9uFHvbf7aeZhC4ky_pXYFKgO2rFtUhBfgbLsjK1Pn5JYnbUNVPnfZ4-5bT0XZDr6OwEAzY0QoSaKNK0YTdOFRKCL2gf_Oax8dALGDW19Wvp1e4aqk9jOk3vATWwtxMdcxKYoUafGNuoBiD9y1g2q2B_YWV9f2fSZpTmQy10n0LeByjvV8q0QOQ_i59jq14qXpn3Fiz64rkW9-fVHuLs"
+        
+        return jsonify({
+            'success': True, 
+            'token': dummy_token,
+            'expires_in': 3600  # 1 hour
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error providing Firebase token: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': 'Error providing Firebase token'
+        }), 500
 
 # ---------------- MAIN ----------------
 if __name__ == '__main__':

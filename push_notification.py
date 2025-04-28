@@ -68,71 +68,123 @@ def get_user_fcm_token(username):
         if conn:
             conn.close()
 
-# This function now just logs info and returns a response,
-# but doesn't actually send notifications from the server
 def log_notification_attempt(task_data, event_type):
     """
-    Log information about notification attempts
-    task_data should contain: title, assigned_to, assigned_by
-    event_type can be: created, updated, deleted, etc.
+    Process notification for task events and prepare data for FCM
+    
+    Parameters:
+    - task_data: Dictionary containing task information
+    - event_type: String indicating the event (created, updated, etc.)
+    
+    Returns:
+    - Dictionary with notification information and FCM token if available
     """
     try:
-        print(f"============ NOTIFICATION LOG - {event_type} ============")
+        print(f"============ NOTIFICATION PROCESSING - {event_type} ============")
         print(f"Task data: {task_data}")
         
-        title = f"Task {event_type.replace('_', ' ').title()}"
+        # Extract task information
+        task_id = task_data.get('task_id', '')
+        title = task_data.get('title', 'Unknown Task')
+        priority = task_data.get('priority', 'medium')
+        status = task_data.get('status', 'pending')
+        assigned_to = task_data.get('assigned_to', '')
+        assigned_by = task_data.get('assigned_by', '')
+        updated_by = task_data.get('updated_by', '')
+        deadline = task_data.get('deadline', '')
         
-        # Create body message based on available data
-        if event_type == 'updated':
-            body = f"Task '{task_data.get('title', 'Unknown')}' has been updated"
-            if task_data.get('updated_by'):
-                body += f" by {task_data['updated_by']}"
-            if task_data.get('status'):
-                body += f". Status: {task_data['status']}"
-            if task_data.get('priority'):
-                body += f", Priority: {task_data['priority']}"
+        # Format deadline if available
+        deadline_str = ""
+        if deadline:
+            try:
+                # Try to parse the deadline as a datetime object
+                if isinstance(deadline, str):
+                    deadline_dt = datetime.fromisoformat(deadline.replace('Z', '+00:00'))
+                    deadline_str = deadline_dt.strftime("%b %d, %Y at %I:%M %p")
+                else:
+                    deadline_str = str(deadline)
+            except Exception as e:
+                print(f"Error formatting deadline: {e}")
+                deadline_str = str(deadline)
+        
+        # Create notification title based on event type
+        notification_title = ""
+        if event_type == 'created':
+            notification_title = "New Task Assigned"
+        elif event_type == 'updated':
+            notification_title = "Task Updated"
+        elif event_type == 'completed':
+            notification_title = "Task Completed"
+        elif event_type == 'deleted':
+            notification_title = "Task Removed"
         else:
-            body = f"Task '{task_data.get('title', 'Unknown')}'"
-            if task_data.get('assigned_to'):
-                body += f" assigned to {task_data['assigned_to']}"
-            if task_data.get('assigned_by'):
-                body += f" by {task_data['assigned_by']}"
-            body += f" is {event_type.replace('_', ' ')}."
-
-        print(f"Notification title: {title}")
-        print(f"Notification body: {body}")
-
-        # Simple data payload
+            notification_title = f"Task {event_type.replace('_', ' ').title()}"
+        
+        # Create notification body with relevant information
+        notification_body = ""
+        if event_type == 'created':
+            notification_body = f"'{title}' assigned to you by {assigned_by}"
+            if priority in ['high', 'urgent']:
+                notification_body += f" (Priority: {priority.upper()})"
+            if deadline_str:
+                notification_body += f" - Due: {deadline_str}"
+        elif event_type == 'updated':
+            notification_body = f"Task '{title}' has been updated"
+            if updated_by:
+                notification_body += f" by {updated_by}"
+            notification_body += f" - Status: {status.replace('_', ' ').title()}"
+            if priority in ['high', 'urgent']:
+                notification_body += f", Priority: {priority.upper()}"
+        elif event_type == 'completed':
+            notification_body = f"Task '{title}' has been marked as completed"
+            if updated_by:
+                notification_body += f" by {updated_by}"
+        elif event_type == 'deleted':
+            notification_body = f"Task '{title}' has been removed"
+        else:
+            notification_body = f"Task '{title}' has been {event_type.replace('_', ' ')}"
+        
+        print(f"Notification title: {notification_title}")
+        print(f"Notification body: {notification_body}")
+        
+        # Create data payload for FCM
         data_payload = {
             'event_type': event_type,
-            'task_id': str(task_data.get('task_id', '')),
+            'task_id': str(task_id),
+            'title': title,
+            'priority': priority,
+            'status': status,
             'click_action': 'FLUTTER_NOTIFICATION_CLICK',
             'timestamp': datetime.now().isoformat()
         }
         
-        # Get username
-        username = task_data.get('assigned_to')
-        if username:
-            print(f"Looking up FCM token for user: {username}")
-            fcm_token = get_user_fcm_token(username)
+        # Get the FCM token for the assigned user
+        if assigned_to:
+            print(f"Looking up FCM token for user: {assigned_to}")
+            fcm_token = get_user_fcm_token(assigned_to)
             if fcm_token:
-                print(f"FCM token available for user {username}")
-                print("Use client-side notification approach")
+                print(f"FCM token available for user {assigned_to}")
+                print("Notification ready for client-side sending")
                 return {
                     "success": True, 
-                    "message": "Notification info logged (client-side sending)",
-                    "fcm_token": fcm_token
+                    "message": "Notification prepared for client-side sending",
+                    "fcm_token": fcm_token,
+                    "notification": {
+                        "title": notification_title,
+                        "body": notification_body,
+                        "data": data_payload
+                    }
                 }
             else:
-                print(f"No FCM token found for user {username}")
+                print(f"No FCM token found for user {assigned_to}")
         else:
             print("No username provided in task data")
         
-        print("============ NOTIFICATION LOG END ============")
+        print("============ NOTIFICATION PROCESSING COMPLETE ============")
         return {"success": False, "message": "No FCM token available"}
     except Exception as e:
-        print(f"Error logging notification: {e}")
-        print("============ NOTIFICATION LOG FAILED ============")
+        print(f"Error processing notification: {e}")
+        print("============ NOTIFICATION PROCESSING FAILED ============")
         return {"success": False, "error": str(e)}
 
-print("Simplified notification module loaded successfully") 
+print("Enhanced notification module loaded successfully") 
