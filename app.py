@@ -1135,6 +1135,29 @@ def download_attachment(attachment_id):
         if conn:
             conn.close()
 
+# ---------------- MARK NOTIFICATION AS READ ----------------
+@app.route('/notifications/mark_read/<notification_id>', methods=['POST'])
+def mark_notification_read(notification_id):
+    conn = None
+    cursor = None
+    try:
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE task_notifications SET is_read = 1 WHERE id = %s
+        """, (notification_id,))
+        conn.commit()
+        return jsonify({'success': True, 'message': 'Notification marked as read'})
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
 # ---------------- MAIN ----------------
 if __name__ == '__main__':
     # Initialize the application
