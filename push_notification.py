@@ -24,9 +24,14 @@ def initialize_firebase():
             try:
                 cred_dict = json.loads(firebase_creds)
                 print(f"Successfully parsed Firebase credentials JSON from environment")
-                # Log project ID
-                if 'project_id' in cred_dict:
-                    print(f"Firebase Project ID: {cred_dict['project_id']}")
+                # Validate service account credentials
+                required_fields = ['type', 'project_id', 'private_key_id', 'private_key', 'client_email']
+                missing_fields = [field for field in required_fields if field not in cred_dict]
+                if missing_fields:
+                    print(f"WARNING: Service account credentials missing fields: {missing_fields}")
+                else:
+                    print(f"Service account credentials validated for project: {cred_dict['project_id']}")
+                    print(f"Using service account email: {cred_dict['client_email']}")
             except json.JSONDecodeError as e:
                 print(f"ERROR: Failed to parse Firebase credentials from environment: {e}")
                 raise
@@ -36,7 +41,7 @@ def initialize_firebase():
             # Check if file exists
             if not os.path.exists('firebase-credentials.json'):
                 print("ERROR: firebase-credentials.json file not found")
-                raise FileNotFoundError("firebase-credentials.json file not found")
+                raise FileNotFoundError("firebase-credentials.json file not found. Please download the service account JSON file from Firebase Console and save it as 'firebase-credentials.json'")
             
             # Try to read and parse the credentials file
             try:
@@ -45,9 +50,15 @@ def initialize_firebase():
                     print(f"Read {len(cred_content)} bytes from credentials file")
                     cred_dict = json.loads(cred_content)  # Validate JSON format
                     print("Credentials file contains valid JSON")
-                    # Log project ID
-                    if 'project_id' in cred_dict:
-                        print(f"Firebase Project ID: {cred_dict['project_id']}")
+                    
+                    # Validate service account credentials
+                    required_fields = ['type', 'project_id', 'private_key_id', 'private_key', 'client_email']
+                    missing_fields = [field for field in required_fields if field not in cred_dict]
+                    if missing_fields:
+                        print(f"WARNING: Service account credentials missing fields: {missing_fields}")
+                    else:
+                        print(f"Service account credentials validated for project: {cred_dict['project_id']}")
+                        print(f"Using service account email: {cred_dict['client_email']}")
             except Exception as e:
                 print(f"ERROR: Failed to read or parse credentials file: {e}")
                 raise

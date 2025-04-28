@@ -15,6 +15,7 @@ import firebase_admin
 from push_notification import send_fcm_notification
 import threading
 import requests
+import traceback
 
 # Load environment variables
 load_dotenv()
@@ -1317,71 +1318,31 @@ def test_fcm_direct(username):
         
         fcm_token = user['fcm_token']
         
-        # Read Firebase credentials to get server key
-        try:
-            # Try to read from file first
-            if os.path.exists('firebase-credentials.json'):
-                with open('firebase-credentials.json', 'r') as f:
-                    cred_data = json.load(f)
-                    project_id = cred_data.get('project_id', 'unknown')
-            else:
-                # Try from environment variable
-                firebase_creds = os.getenv('FIREBASE_CREDENTIALS')
-                if firebase_creds:
-                    cred_data = json.loads(firebase_creds)
-                    project_id = cred_data.get('project_id', 'unknown')
-                else:
-                    project_id = 'unknown'
-        except Exception as e:
-            logger.error(f"Error reading Firebase credentials: {e}")
-            project_id = 'unknown'
-            
-        # Firebase server key should be set as an environment variable
-        server_key = os.getenv('FIREBASE_SERVER_KEY')
-        if not server_key:
-            return jsonify({
-                'success': False, 
-                'message': 'FIREBASE_SERVER_KEY environment variable not set'
-            }), 500
-
-        # FCM API endpoint
-        fcm_url = 'https://fcm.googleapis.com/fcm/send'
+        # Import module here to avoid circular imports
+        from push_notification import send_fcm_notification
         
-        # HTTP headers
-        headers = {
-            'Authorization': f'key={server_key}',
-            'Content-Type': 'application/json'
+        # Create test notification data
+        test_data = {
+            'task_id': 'test_task_123',
+            'title': 'Test Task',
+            'description': 'This is a test notification',
+            'deadline': datetime.now().isoformat(),
+            'priority': 'high',
+            'status': 'pending',
+            'assigned_by': 'admin',
+            'assigned_to': username,
+            'updated_by': 'system'
         }
         
-        # Notification payload
-        payload = {
-            'to': fcm_token,
-            'notification': {
-                'title': 'Direct FCM Test',
-                'body': f'This is a direct FCM test notification for {username}',
-                'sound': 'default'
-            },
-            'data': {
-                'click_action': 'FLUTTER_NOTIFICATION_CLICK',
-                'test': 'true',
-                'timestamp': datetime.now().isoformat()
-            },
-            'priority': 'high'
-        }
-        
-        # Make the HTTP request
-        logger.info(f"Sending direct FCM request for user {username} with token: {fcm_token[:10]}...{fcm_token[-5:]}")
-        logger.info(f"FCM Project ID: {project_id}")
-        response = requests.post(fcm_url, headers=headers, json=payload)
-        
-        response_data = response.json()
-        logger.info(f"FCM Response: {response_data}")
+        # Use the Firebase Admin SDK to send the notification
+        logger.info(f"Sending test notification to {username} with token: {fcm_token[:10]}...{fcm_token[-5:]}")
+        result = send_fcm_notification(test_data, 'test')
+        logger.info(f"Notification result: {result}")
         
         return jsonify({
-            'success': response.status_code == 200,
-            'fcm_response': response_data,
-            'token_used': fcm_token,
-            'project_id': project_id
+            'success': True,
+            'fcm_token': fcm_token,
+            'notification_result': result
         }), 200
         
     except Exception as e:
@@ -1393,6 +1354,53 @@ def test_fcm_direct(username):
             cursor.close()
         if conn:
             conn.close()
+
+# ---------------- TEST FIREBASE ----------------
+@app.route('/test_firebase', methods=['GET'])
+def test_firebase():
+    try:
+        # Check if Firebase is initialized
+        is_initialized = bool(firebase_admin._apps)
+        
+        # Get Firebase app details
+        app_details = {}
+        if is_initialized and firebase_admin._apps:
+            app = firebase_admin._apps[None]
+            app_details = {
+                'name': app.name,
+                'options': str(app._options)
+            }
+        
+        # Create test notification data
+        test_data = {
+            'task_id': 'test123',
+            'title': 'Test Notification',
+            'description': 'Testing Firebase Cloud Messaging',
+            'assigned_to': 'admin',
+            'assigned_by': 'system',
+            'deadline': datetime.now().isoformat(),
+            'priority': 'high',
+            'status': 'pending'
+        }
+        
+        # Try to send a test notification
+        notification_result = send_fcm_notification(test_data, 'test')
+        
+        return jsonify({
+            'success': True,
+            'firebase_initialized': is_initialized,
+            'firebase_app': app_details,
+            'notification_result': notification_result,
+            'credentials_file_exists': os.path.exists('firebase-credentials.json'),
+            'credentials_file_size': os.path.getsize('firebase-credentials.json') if os.path.exists('firebase-credentials.json') else 0
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
 
 # ---------------- MAIN ----------------
 if __name__ == '__main__':
