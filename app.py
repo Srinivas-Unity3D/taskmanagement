@@ -1326,6 +1326,42 @@ def store_notification(task_data, event_type, target_user, sender_role):
         if conn:
             conn.close()
 
+# ---------------- SNOOZE NOTIFICATION ----------------
+@app.route('/notifications/snooze', methods=['POST'])
+def snooze_notification():
+    try:
+        data = request.get_json()
+        notification_id = data.get('notification_id')
+        snooze_until = data.get('snooze_until')
+        reason = data.get('reason')
+        audio_note = data.get('audio_note')
+        
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor()
+        
+        # Update notification status
+        cursor.execute("""
+            UPDATE task_notifications 
+            SET status = 'snoozed',
+                snooze_until = %s,
+                snooze_reason = %s,
+                snooze_audio = %s
+            WHERE id = %s
+        """, (snooze_until, reason, audio_note, notification_id))
+        
+        conn.commit()
+        return jsonify({'success': True, 'message': 'Notification snoozed'})
+        
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
 # ---------------- MAIN ----------------
 if __name__ == '__main__':
     # Initialize the application
