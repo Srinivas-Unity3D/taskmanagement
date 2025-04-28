@@ -24,6 +24,9 @@ def initialize_firebase():
             try:
                 cred_dict = json.loads(firebase_creds)
                 print(f"Successfully parsed Firebase credentials JSON from environment")
+                # Log project ID
+                if 'project_id' in cred_dict:
+                    print(f"Firebase Project ID: {cred_dict['project_id']}")
             except json.JSONDecodeError as e:
                 print(f"ERROR: Failed to parse Firebase credentials from environment: {e}")
                 raise
@@ -40,8 +43,11 @@ def initialize_firebase():
                 with open('firebase-credentials.json', 'r') as f:
                     cred_content = f.read()
                     print(f"Read {len(cred_content)} bytes from credentials file")
-                    json.loads(cred_content)  # Validate JSON format
+                    cred_dict = json.loads(cred_content)  # Validate JSON format
                     print("Credentials file contains valid JSON")
+                    # Log project ID
+                    if 'project_id' in cred_dict:
+                        print(f"Firebase Project ID: {cred_dict['project_id']}")
             except Exception as e:
                 print(f"ERROR: Failed to read or parse credentials file: {e}")
                 raise
@@ -69,6 +75,33 @@ def initialize_firebase():
         print("============ FIREBASE INITIALIZATION FAILED ============")
         raise
 
+def validate_fcm_token(token):
+    """Validates and cleans a FCM token"""
+    if not token:
+        print("Token is empty or None")
+        return None
+        
+    # Remove any whitespace
+    token = token.strip()
+    
+    # Check token length (FCM tokens are typically very long)
+    if len(token) < 50:
+        print(f"Token seems too short: {len(token)} chars")
+        return None
+        
+    # Check if token contains invalid characters
+    allowed_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789:_-")
+    if not all(c in allowed_chars for c in token):
+        print("Token contains invalid characters")
+        return None
+        
+    # Check if token has the expected structure (typically has a colon)
+    if ":" not in token:
+        print("Token is missing ':' character which is typical in FCM tokens")
+        
+    print(f"Token validation passed: {token[:10]}...{token[-5:]}")
+    return token
+
 def get_user_fcm_token(username):
     """Get a user's FCM token from the database"""
     conn = None
@@ -85,7 +118,9 @@ def get_user_fcm_token(username):
             token = user['fcm_token']
             masked_token = token[:10] + "..." + token[-5:] if len(token) > 15 else token
             print(f"Found FCM token for user {username}: {masked_token}")
-            return token
+            
+            # Validate token format
+            return validate_fcm_token(token)
         
         print(f"No FCM token found for user {username}")
         return None
@@ -130,36 +165,13 @@ def send_fcm_notification(task_data, event_type):
         print(f"Notification title: {title}")
         print(f"Notification body: {body}")
 
-        # Prepare notification payload
-        android_config = messaging.AndroidConfig(
-            priority='high',
-            notification=messaging.AndroidNotification(
-                sound='default',
-                priority='high',
-                vibrate_timings=['1s', '0.5s', '1s']
-            )
-        )
-        
-        apns_config = messaging.APNSConfig(
-            payload=messaging.APNSPayload(
-                aps=messaging.Aps(
-                    sound='default',
-                    badge=1
-                )
-            )
-        )
-        
+        # Simple data payload
         data_payload = {
             'event_type': event_type,
             'task_id': str(task_data.get('task_id', '')),
             'click_action': 'FLUTTER_NOTIFICATION_CLICK',
             'timestamp': datetime.now().isoformat()
         }
-        
-        notification = messaging.Notification(
-            title=title,
-            body=body,
-        )
         
         # Try to send to direct FCM token first
         username = task_data.get('assigned_to')
@@ -168,10 +180,13 @@ def send_fcm_notification(task_data, event_type):
             fcm_token = get_user_fcm_token(username)
             if fcm_token:
                 print(f"Sending direct notification to FCM token for user {username}")
+                
+                # Create a simpler message structure
                 message = messaging.Message(
-                    notification=notification,
-                    android=android_config,
-                    apns=apns_config,
+                    notification=messaging.Notification(
+                        title=title,
+                        body=body,
+                    ),
                     data=data_payload,
                     token=fcm_token,
                 )
@@ -202,10 +217,12 @@ def send_fcm_notification(task_data, event_type):
         topic = task_data.get('assigned_to', 'default_topic')
         print(f"Sending notification to topic: {topic}")
         
+        # Create a simpler topic message
         message = messaging.Message(
-            notification=notification,
-            android=android_config,
-            apns=apns_config,
+            notification=messaging.Notification(
+                title=title,
+                body=body,
+            ),
             data=data_payload,
             topic=topic,
         )
