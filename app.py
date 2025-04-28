@@ -460,14 +460,15 @@ def create_task():
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor()
 
+        # Generate UUID for task_id
+        task_id = str(uuid.uuid4())
+
         # Insert task
         cursor.execute("""
-            INSERT INTO tasks (title, description, assigned_to, assigned_by, deadline, priority, status)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """, (title, description, assigned_to, assigned_by, deadline, priority, status))
+            INSERT INTO tasks (task_id, title, description, assigned_to, assigned_by, deadline, priority, status)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """, (task_id, title, description, assigned_to, assigned_by, deadline, priority, status))
         
-        task_id = cursor.lastrowid
-
         # Handle audio note
         if audio_note:
             audio_data = base64.b64decode(audio_note.get('data', ''))
