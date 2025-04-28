@@ -448,23 +448,23 @@ def create_task():
         data = request.get_json()
         title = data.get('title')
         description = data.get('description')
-        assignee = data.get('assignee')
+        assigned_to = data.get('assigned_to')
+        assigned_by = data.get('assigned_by')
         deadline = data.get('deadline')
         priority = data.get('priority')
         status = data.get('status')
         audio_note = data.get('audio_note')
         attachments = data.get('attachments', [])
         alarm_settings = data.get('alarm_settings')
-        created_by = data.get('created_by')
 
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor()
 
         # Insert task
         cursor.execute("""
-            INSERT INTO tasks (title, description, assignee, deadline, priority, status, created_by)
+            INSERT INTO tasks (title, description, assigned_to, assigned_by, deadline, priority, status)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """, (title, description, assignee, deadline, priority, status, created_by))
+        """, (title, description, assigned_to, assigned_by, deadline, priority, status))
         
         task_id = cursor.lastrowid
 
@@ -477,7 +477,7 @@ def create_task():
             cursor.execute("""
                 INSERT INTO task_audio_notes (task_id, audio_data, duration, created_by, file_name)
                 VALUES (%s, %s, %s, %s, %s)
-            """, (task_id, audio_data, audio_duration, created_by, file_name))
+            """, (task_id, audio_data, audio_duration, assigned_by, file_name))
 
         # Handle attachments
         for attachment in attachments:
@@ -489,7 +489,7 @@ def create_task():
             cursor.execute("""
                 INSERT INTO task_attachments (task_id, file_data, file_name, file_type, file_size, created_by)
                 VALUES (%s, %s, %s, %s, %s, %s)
-            """, (task_id, file_data, file_name, file_type, file_size, created_by))
+            """, (task_id, file_data, file_name, file_type, file_size, assigned_by))
 
         # Handle alarm settings
         if alarm_settings:
