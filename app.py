@@ -14,6 +14,7 @@ from google.oauth2 import service_account
 import firebase_admin
 from push_notification import send_fcm_notification
 import threading
+import requests
 
 # Load environment variables
 load_dotenv()
@@ -1292,6 +1293,99 @@ def test_notification(username):
         
     except Exception as e:
         logger.error(f"Error testing notification: {str(e)}")
+        logger.exception("Full exception:")
+        return jsonify({'success': False, 'message': f'Error: {str(e)}'}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+# ---------------- TEST FCM DIRECT ----------------
+@app.route('/test_fcm_direct/<username>', methods=['GET'])
+def test_fcm_direct(username):
+    try:
+        # Get user information
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor(dictionary=True)
+        
+        cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
+        user = cursor.fetchone()
+        
+        if not user or not user['fcm_token']:
+            return jsonify({'success': False, 'message': 'User not found or has no FCM token'}), 404
+        
+        fcm_token = user['fcm_token']
+        
+        # Read Firebase credentials to get server key
+        try:
+            # Try to read from file first
+            if os.path.exists('firebase-credentials.json'):
+                with open('firebase-credentials.json', 'r') as f:
+                    cred_data = json.load(f)
+                    project_id = cred_data.get('project_id', 'unknown')
+            else:
+                # Try from environment variable
+                firebase_creds = os.getenv('FIREBASE_CREDENTIALS')
+                if firebase_creds:
+                    cred_data = json.loads(firebase_creds)
+                    project_id = cred_data.get('project_id', 'unknown')
+                else:
+                    project_id = 'unknown'
+        except Exception as e:
+            logger.error(f"Error reading Firebase credentials: {e}")
+            project_id = 'unknown'
+            
+        # Firebase server key should be set as an environment variable
+        server_key = os.getenv('FIREBASE_SERVER_KEY')
+        if not server_key:
+            return jsonify({
+                'success': False, 
+                'message': 'FIREBASE_SERVER_KEY environment variable not set'
+            }), 500
+
+        # FCM API endpoint
+        fcm_url = 'https://fcm.googleapis.com/fcm/send'
+        
+        # HTTP headers
+        headers = {
+            'Authorization': f'key={server_key}',
+            'Content-Type': 'application/json'
+        }
+        
+        # Notification payload
+        payload = {
+            'to': fcm_token,
+            'notification': {
+                'title': 'Direct FCM Test',
+                'body': f'This is a direct FCM test notification for {username}',
+                'sound': 'default'
+            },
+            'data': {
+                'click_action': 'FLUTTER_NOTIFICATION_CLICK',
+                'test': 'true',
+                'timestamp': datetime.now().isoformat()
+            },
+            'priority': 'high'
+        }
+        
+        # Make the HTTP request
+        logger.info(f"Sending direct FCM request for user {username} with token: {fcm_token[:10]}...{fcm_token[-5:]}")
+        logger.info(f"FCM Project ID: {project_id}")
+        response = requests.post(fcm_url, headers=headers, json=payload)
+        
+        response_data = response.json()
+        logger.info(f"FCM Response: {response_data}")
+        
+        return jsonify({
+            'success': response.status_code == 200,
+            'fcm_response': response_data,
+            'token_used': fcm_token,
+            'project_id': project_id
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error in direct FCM test: {str(e)}")
         logger.exception("Full exception:")
         return jsonify({'success': False, 'message': f'Error: {str(e)}'}), 500
     finally:
