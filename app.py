@@ -17,6 +17,7 @@ import threading
 import requests
 import io
 from logging.handlers import RotatingFileHandler
+from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
