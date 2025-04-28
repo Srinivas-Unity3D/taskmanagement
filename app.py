@@ -386,6 +386,14 @@ def login():
 
         user = cursor.fetchone()
         if user:
+            # Update FCM token if provided
+            if 'fcm_token' in data and data['fcm_token']:
+                cursor.execute("""
+                    UPDATE users SET fcm_token = %s WHERE username = %s
+                """, (data['fcm_token'], user['username']))
+                conn.commit()
+                logger.info(f"Updated FCM token during login for user: {user['username']}")
+            
             return jsonify({
                 'message': 'Login successful',
                 'user_id': user['user_id'],
@@ -1154,6 +1162,47 @@ def download_attachment(attachment_id):
             'success': False,
             'message': f"Error downloading attachment: {str(e)}"
         }), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+# ---------------- UPDATE FCM TOKEN ----------------
+@app.route('/update_fcm_token', methods=['POST'])
+def update_fcm_token():
+    conn = None
+    cursor = None
+    try:
+        data = request.get_json()
+        if 'username' not in data or 'fcm_token' not in data:
+            return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+
+        username = data['username']
+        fcm_token = data['fcm_token']
+        
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor()
+
+        # Update the user's FCM token
+        cursor.execute("""
+            UPDATE users SET fcm_token = %s WHERE username = %s
+        """, (fcm_token, username))
+        
+        if cursor.rowcount == 0:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+            
+        conn.commit()
+        logger.info(f"Updated FCM token for user: {username}")
+        
+        return jsonify({'success': True, 'message': 'FCM token updated successfully'}), 200
+    
+    except Exception as e:
+        logger.error(f"Error updating FCM token: {str(e)}")
+        if conn:
+            conn.rollback()
+        return jsonify({'success': False, 'message': f'Error: {str(e)}'}), 500
+    
     finally:
         if cursor:
             cursor.close()
