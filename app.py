@@ -18,6 +18,7 @@ import requests
 import io
 from logging.handlers import RotatingFileHandler
 from dotenv import load_dotenv
+from google.auth.transport.requests import Request
 
 # Load environment variables
 load_dotenv()
@@ -1542,29 +1543,73 @@ def test_client_notification(username):
 @app.route('/firebase_token', methods=['GET'])
 def get_firebase_token():
     """
-    Provides a Firebase OAuth token for clients to use with FCM
-    This is a simplified approach - in production you would implement
-    proper OAuth token generation using service account credentials
+    Provides a Firebase OAuth token for clients to use with FCM API v1
+    This endpoint gets or generates an OAuth access token for FCM
     """
     try:
-        # In a real implementation, you would generate this token using
-        # the Firebase Admin SDK or a similar authenticated service
+        # Check if we have a cached token
+        cached_token = app.config.get('fcm_oauth_token')
+        cached_token_expiry = app.config.get('fcm_oauth_token_expiry', 0)
         
-        # For development purposes, returning a static token with short expiry
-        # In production, implement proper OAuth2 flow with your Firebase service account
-        dummy_token = "ya29.c.b0AXv0zTP9uFHvbf7aeZhC4ky_pXYFKgO2rFtUhBfgbLsjK1Pn5JYnbUNVPnfZ4-5bT0XZDr6OwEAzY0QoSaKNK0YTdOFRKCL2gf_Oax8dALGDW19Wvp1e4aqk9jOk3vATWwtxMdcxKYoUafGNuoBiD9y1g2q2B_YWV9f2fSZpTmQy10n0LeByjvV8q0QOQ_i59jq14qXpn3Fiz64rkW9-fVHuLs"
-        
-        return jsonify({
-            'success': True, 
-            'token': dummy_token,
-            'expires_in': 3600  # 1 hour
-        }), 200
-        
+        # If token exists and is valid (with 5-minute buffer)
+        current_time = time.time()
+        if cached_token and cached_token_expiry > current_time + 300:
+            logger.info("Using cached OAuth token for FCM")
+            return jsonify({
+                'success': True, 
+                'token': cached_token,
+                'expires_in': int(cached_token_expiry - current_time)
+            }), 200
+            
+        # Get service account credentials from environment variable
+        service_account_info = os.getenv('FIREBASE_SERVICE_ACCOUNT')
+        if not service_account_info:
+            logger.error("FIREBASE_SERVICE_ACCOUNT environment variable not set")
+            return jsonify({
+                'success': False,
+                'message': 'Firebase service account not configured'
+            }), 500
+
+        try:
+            # Parse the service account JSON
+            service_account = json.loads(service_account_info)
+            
+            # Create credentials from service account
+            credentials = service_account.Credentials.from_service_account_info(
+                service_account,
+                scopes=['https://www.googleapis.com/auth/firebase.messaging']
+            )
+            
+            # Get the access token
+            credentials.refresh(Request())
+            access_token = credentials.token
+            
+            # Cache the token for future requests (expires in 50 minutes)
+            token_expiry = current_time + 3000  # 50 minutes in seconds
+            app.config['fcm_oauth_token'] = access_token
+            app.config['fcm_oauth_token_expiry'] = token_expiry
+            
+            logger.info("Generated new OAuth token for FCM")
+            
+            return jsonify({
+                'success': True, 
+                'token': access_token,
+                'expires_in': 3000  # 50 minutes
+            }), 200
+            
+        except Exception as e:
+            logger.error(f"Error generating OAuth token: {str(e)}")
+            return jsonify({
+                'success': False,
+                'message': f'Error generating OAuth token: {str(e)}'
+            }), 500
+            
     except Exception as e:
         logger.error(f"Error providing Firebase token: {str(e)}")
+        logger.exception("Full exception:")
         return jsonify({
             'success': False,
-            'message': 'Error providing Firebase token'
+            'message': f'Error providing Firebase token: {str(e)}'
         }), 500
 
 # ---------------- MAIN ----------------
