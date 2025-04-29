@@ -480,8 +480,13 @@ def login():
 # ---------------- CREATE TASK ----------------
 @app.route('/api/tasks', methods=['POST'])
 def create_task():
+    conn = None
+    cursor = None
     try:
         data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No JSON data provided'}), 400
+            
         title = data.get('title')
         description = data.get('description')
         assigned_to = data.get('assigned_to')
@@ -492,6 +497,10 @@ def create_task():
         audio_note = data.get('audio_note')
         attachments = data.get('attachments', [])
         alarm_settings = data.get('alarm_settings')
+
+        # Validate required fields
+        if not all([title, assigned_to, assigned_by, deadline, priority, status]):
+            return jsonify({'error': 'Missing required fields'}), 400
 
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor()
@@ -538,63 +547,91 @@ def create_task():
                 raise
 
         # Handle attachments
-        attachments = request.files.getlist('attachments')
-        for attachment in attachments:
-            try:
-                attachment_id = str(uuid.uuid4())
-                filename = secure_filename(f"{attachment_id}_{attachment.filename}")
-                file_path = os.path.join(ATTACHMENTS_FOLDER, filename)
-                
-                # Save the file
-                attachment.save(file_path)
-                
-                # Get file size
-                file_size = os.path.getsize(file_path)
-                
-                # Get file type from filename
-                file_type = os.path.splitext(filename)[1][1:].lower()
-                
-                # Store the relative path in database
-                relative_path = os.path.join('uploads', 'attachments', filename)
-                cursor.execute("""
-                    INSERT INTO task_attachments (
-                        attachment_id, task_id, file_name, file_type,
-                        file_size, file_path, created_by
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """, (
-                    attachment_id,
-                    task_id,
-                    attachment.filename,
-                    file_type,
-                    file_size,
-                    relative_path,
-                    assigned_by
-                ))
-                
-                logger.info(f"Attachment saved with ID: {attachment_id} at path: {relative_path}")
-            except Exception as e:
-                logger.error(f"Error saving attachment: {str(e)}")
-                raise
+        if request.files:
+            attachments = request.files.getlist('attachments')
+            for attachment in attachments:
+                try:
+                    attachment_id = str(uuid.uuid4())
+                    filename = secure_filename(f"{attachment_id}_{attachment.filename}")
+                    file_path = os.path.join(ATTACHMENTS_FOLDER, filename)
+                    
+                    # Create uploads/attachments directory if it doesn't exist
+                    os.makedirs(ATTACHMENTS_FOLDER, exist_ok=True)
+                    
+                    # Save the file
+                    attachment.save(file_path)
+                    
+                    # Get file size
+                    file_size = os.path.getsize(file_path)
+                    
+                    # Get file type from filename
+                    file_type = os.path.splitext(filename)[1][1:].lower()
+                    
+                    # Store the relative path in database
+                    relative_path = os.path.join('uploads', 'attachments', filename)
+                    cursor.execute("""
+                        INSERT INTO task_attachments (
+                            attachment_id, task_id, file_name, file_type,
+                            file_size, file_path, created_by
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        attachment_id,
+                        task_id,
+                        attachment.filename,
+                        file_type,
+                        file_size,
+                        relative_path,
+                        assigned_by
+                    ))
+                    
+                    logger.info(f"Attachment saved with ID: {attachment_id} at path: {relative_path}")
+                except Exception as e:
+                    logger.error(f"Error saving attachment: {str(e)}")
+                    raise
 
         # Handle alarm settings
         if alarm_settings:
             alarm_time = alarm_settings.get('alarm_time')
             alarm_type = alarm_settings.get('alarm_type')
             
-            cursor.execute("""
-                INSERT INTO task_alarms (task_id, alarm_time, alarm_type)
-                VALUES (%s, %s, %s)
-            """, (task_id, alarm_time, alarm_type))
+            if alarm_time and alarm_type:
+                cursor.execute("""
+                    INSERT INTO task_alarms (task_id, alarm_time, alarm_type)
+                    VALUES (%s, %s, %s)
+                """, (task_id, alarm_time, alarm_type))
 
         conn.commit()
-        return jsonify({'message': 'Task created successfully', 'task_id': task_id}), 201
+        
+        # Prepare notification data
+        notification_data = {
+            'task_id': task_id,
+            'title': title,
+            'description': description,
+            'assigned_to': assigned_to,
+            'assigned_by': assigned_by,
+            'priority': priority,
+            'status': status,
+            'deadline': deadline
+        }
+        
+        # Notify users about the new task
+        notify_task_update(notification_data, 'task_created')
+        
+        return jsonify({
+            'success': True,
+            'message': 'Task created successfully',
+            'task_id': task_id
+        }), 201
 
     except Exception as e:
         logger.error(f"Error creating task: {str(e)}")
         if conn:
             conn.rollback()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
     finally:
         if cursor:
             cursor.close()
