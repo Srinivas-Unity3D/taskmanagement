@@ -439,6 +439,14 @@ def login():
 
         user = cursor.fetchone()
         if user:
+            # Update FCM token if provided
+            if 'fcm_token' in data and data['fcm_token']:
+                cursor.execute("""
+                    UPDATE users SET fcm_token = %s WHERE user_id = %s
+                """, (data['fcm_token'], user['user_id']))
+                conn.commit()
+                logger.info(f"Updated FCM token for user {user['username']}")
+
             return jsonify({
                 'message': 'Login successful',
                 'user_id': user['user_id'],
