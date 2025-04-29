@@ -589,26 +589,32 @@ def create_task():
                 logger.error(f"Error saving audio file: {str(e)}")
                 raise
 
-        # Handle attachments
-        if request.files:
-            attachments = request.files.getlist('attachments')
-            for attachment in attachments:
+        # Handle attachments from JSON data
+        if attachments:
+            for attachment_data in attachments:
                 try:
                     attachment_id = str(uuid.uuid4())
-                    filename = secure_filename(f"{attachment_id}_{attachment.filename}")
+                    file_name = attachment_data.get('file_name')
+                    file_type = attachment_data.get('file_type')
+                    file_data = attachment_data.get('file_data')  # Base64 encoded file data
+                    
+                    if not all([file_name, file_type, file_data]):
+                        continue
+                    
+                    # Ensure filename is secure and unique
+                    filename = secure_filename(f"{attachment_id}_{file_name}")
                     file_path = os.path.join(ATTACHMENTS_FOLDER, filename)
                     
                     # Create uploads/attachments directory if it doesn't exist
                     os.makedirs(ATTACHMENTS_FOLDER, exist_ok=True)
                     
-                    # Save the file
-                    attachment.save(file_path)
+                    # Decode and save the file
+                    file_binary = base64.b64decode(file_data)
+                    with open(file_path, 'wb') as f:
+                        f.write(file_binary)
                     
                     # Get file size
                     file_size = os.path.getsize(file_path)
-                    
-                    # Get file type from filename
-                    file_type = os.path.splitext(filename)[1][1:].lower()
                     
                     # Store the relative path in database
                     relative_path = os.path.join('uploads', 'attachments', filename)
@@ -621,7 +627,7 @@ def create_task():
                     """, (
                         attachment_id,
                         task_id,
-                        attachment.filename,
+                        file_name,
                         file_type,
                         file_size,
                         relative_path,
