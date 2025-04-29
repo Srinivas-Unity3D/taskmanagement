@@ -559,9 +559,11 @@ def create_task():
         if audio_note:
             try:
                 audio_id = str(uuid.uuid4())
+                # Decode the JSON string first
+                audio_note = json.loads(audio_note) if isinstance(audio_note, str) else audio_note
                 audio_data = audio_note.get('audio_data', '')  # Base64 audio data
                 audio_duration = audio_note.get('duration', 0)
-                original_filename = audio_note.get('file_name', 'voice_note.wav')
+                original_filename = audio_note.get('filename', 'voice_note.wav')
                 
                 # Ensure filename is secure and unique
                 filename = secure_filename(f"{audio_id}_{original_filename}")
