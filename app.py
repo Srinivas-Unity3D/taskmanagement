@@ -27,7 +27,13 @@ os.makedirs(AUDIO_FOLDER, exist_ok=True)
 os.makedirs(ATTACHMENTS_FOLDER, exist_ok=True)
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
+CORS(app, resources={
+    r"/*": {
+        "origins": "*",
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization", "Accept"]
+    }
+})
 
 # Configure Flask app
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
@@ -38,8 +44,19 @@ app.config['DEBUG'] = True  # Enable debug for development
 app.config['ENV'] = 'development'  # Set to development environment
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key')
 
-socketio = SocketIO(app, cors_allowed_origins="*", ping_timeout=20, ping_interval=10,
-                   async_mode='threading', logger=True, engineio_logger=True)
+socketio = SocketIO(app, 
+    cors_allowed_origins="*", 
+    ping_timeout=20, 
+    ping_interval=10,
+    async_mode='threading', 
+    logger=True, 
+    engineio_logger=True,
+    always_connect=True,
+    reconnection=True,
+    reconnection_attempts=5,
+    reconnection_delay=1000,
+    reconnection_delay_max=5000
+)
 
 # Setup logging
 logging.basicConfig(
@@ -1564,4 +1581,11 @@ if __name__ == '__main__':
     initialize_application()
     
     # Run the server
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True, use_reloader=False) 
+    socketio.run(
+        app, 
+        host='0.0.0.0', 
+        port=5000, 
+        debug=True, 
+        use_reloader=False,
+        allow_unsafe_werkzeug=True
+    ) 
