@@ -129,6 +129,19 @@ def notify_task_update(task_data, event_type='task_update'):
 # Create database tables if they don't exist
 def init_db():
     try:
+        # First connect without database to create it if needed
+        temp_config = db_config.copy()
+        temp_config.pop('database', None)  # Remove database from config
+        conn = mysql.connector.connect(**temp_config)
+        cursor = conn.cursor()
+
+        # Create database if it doesn't exist
+        cursor.execute(f"CREATE DATABASE IF NOT EXISTS {db_config['database']}")
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        # Now connect to the specific database
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor()
 
@@ -232,12 +245,13 @@ def init_db():
 
     except Exception as e:
         logger.error(f"Error initializing database: {str(e)}")
-        if conn:
+        if 'conn' in locals():
             conn.rollback()
+        raise
     finally:
-        if cursor:
+        if 'cursor' in locals():
             cursor.close()
-        if conn:
+        if 'conn' in locals():
             conn.close()
 
 # Initialize database on startup
