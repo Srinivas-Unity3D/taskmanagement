@@ -515,6 +515,9 @@ def create_task():
                 filename = secure_filename(f"{audio_id}_{original_filename}")
                 file_path = os.path.join(AUDIO_FOLDER, filename)
                 
+                # Create uploads/audio directory if it doesn't exist
+                os.makedirs(AUDIO_FOLDER, exist_ok=True)
+                
                 # Decode and save the audio file
                 audio_binary = base64.b64decode(audio_data)
                 with open(file_path, 'wb') as f:
@@ -1443,14 +1446,6 @@ def snooze_notification():
         if conn:
             conn.close()
 
-# ---------------- MAIN ----------------
-if __name__ == '__main__':
-    # Initialize the application
-    initialize_application()
-    
-    # Run the server
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True, use_reloader=False)
-
 def cleanup_task_files(task_id):
     """Clean up files associated with a task when it's deleted"""
     try:
@@ -1482,4 +1477,12 @@ def cleanup_task_files(task_id):
         if cursor:
             cursor.close()
         if conn:
-            conn.close() 
+            conn.close()
+
+# ---------------- MAIN ----------------
+if __name__ == '__main__':
+    # Initialize the application
+    initialize_application()
+    
+    # Run the server
+    socketio.run(app, host='0.0.0.0', port=5000, debug=True, use_reloader=False) 
