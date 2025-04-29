@@ -10,12 +10,26 @@ import os
 from dotenv import load_dotenv
 import base64
 import io
+from werkzeug.utils import secure_filename
+import shutil
 
 # Load environment variables
 load_dotenv()
 
+# Configure upload folder
+UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
+AUDIO_FOLDER = os.path.join(UPLOAD_FOLDER, 'audio')
+ALLOWED_AUDIO_EXTENSIONS = {'wav', 'mp3', 'm4a', 'ogg'}
+
+# Create upload directories if they don't exist
+os.makedirs(AUDIO_FOLDER, exist_ok=True)
+
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
+
+# Configure Flask app
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 
 # Production configurations
 app.config['DEBUG'] = True  # Enable debug for development
@@ -183,6 +197,19 @@ def init_db():
             )
         """)
 
+        # Create task_audio_notes table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS task_audio_notes (
+                audio_id VARCHAR(36) PRIMARY KEY,
+                task_id VARCHAR(36) NOT NULL,
+                file_path VARCHAR(255) NOT NULL,
+                file_name VARCHAR(255) NOT NULL DEFAULT 'voice_note.wav',
+                duration INT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
+            )
+        """)
+
         # Create task_notifications table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS task_notifications (
@@ -203,21 +230,6 @@ def init_db():
                 FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE ON UPDATE CASCADE,
                 FOREIGN KEY (sender_name) REFERENCES users(username) ON DELETE CASCADE ON UPDATE CASCADE,
                 FOREIGN KEY (target_user) REFERENCES users(username) ON DELETE CASCADE ON UPDATE CASCADE
-            )
-        """)
-
-        # Create audio notes table with duration field
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS task_audio_notes (
-                audio_id VARCHAR(36) PRIMARY KEY,
-                task_id VARCHAR(36) NOT NULL,
-                audio_data LONGBLOB NOT NULL,
-                file_name VARCHAR(255) NOT NULL,
-                duration INT,
-                created_by VARCHAR(100),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE ON UPDATE CASCADE,
-                FOREIGN KEY (created_by) REFERENCES users(username) ON DELETE SET NULL ON UPDATE CASCADE
             )
         """)
 
@@ -493,14 +505,32 @@ def create_task():
         
         # Handle audio note
         if audio_note:
-            audio_data = base64.b64decode(audio_note.get('data', ''))
-            audio_duration = audio_note.get('duration', 0)
-            file_name = audio_note.get('file_name', 'voice_note.wav')
-            
-            cursor.execute("""
-                INSERT INTO task_audio_notes (task_id, audio_data, duration, created_by, file_name)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (task_id, audio_data, audio_duration, assigned_by, file_name))
+            try:
+                audio_id = str(uuid.uuid4())
+                audio_data = audio_note.get('audio_data', '')  # Base64 audio data
+                audio_duration = audio_note.get('duration', 0)
+                original_filename = audio_note.get('file_name', 'voice_note.wav')
+                
+                # Ensure filename is secure and unique
+                filename = secure_filename(f"{audio_id}_{original_filename}")
+                file_path = os.path.join(AUDIO_FOLDER, filename)
+                
+                # Decode and save the audio file
+                audio_binary = base64.b64decode(audio_data)
+                with open(file_path, 'wb') as f:
+                    f.write(audio_binary)
+                
+                # Store the relative path in database
+                relative_path = os.path.join('uploads', 'audio', filename)
+                cursor.execute("""
+                    INSERT INTO task_audio_notes (audio_id, task_id, file_path, duration, file_name)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (audio_id, task_id, relative_path, audio_duration, original_filename))
+                
+                logger.info(f"Audio note saved with ID: {audio_id} at path: {relative_path}")
+            except Exception as e:
+                logger.error(f"Error saving audio file: {str(e)}")
+                raise
 
         # Handle attachments
         for attachment in attachments:
@@ -778,25 +808,27 @@ def get_audio_note(task_id):
         cursor = conn.cursor(dictionary=True)
 
         cursor.execute("""
-            SELECT audio_id, audio_data, duration, file_name
+            SELECT audio_id, file_path, duration, file_name
             FROM task_audio_notes
             WHERE task_id = %s
         """, (task_id,))
 
         audio = cursor.fetchone()
         if audio:
-            # Create a BytesIO object from the binary data
-            audio_data = io.BytesIO(audio['audio_data'])
+            # Get the full file path
+            file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), audio['file_path'])
             
-            # Get the filename, default to WAV if not specified
-            filename = audio.get('file_name', f'voice_note_{audio["audio_id"]}.wav')
+            if not os.path.exists(file_path):
+                return jsonify({
+                    'success': False,
+                    'message': 'Audio file not found on server'
+                }), 404
             
-            # Send the file with proper mimetype
             return send_file(
-                audio_data,
-                mimetype='audio/wav',  # Always use WAV format
+                file_path,
+                mimetype='audio/wav',  # You might want to detect the actual mime type
                 as_attachment=True,
-                download_name=filename
+                download_name=audio['file_name']
             )
         else:
             return jsonify({
@@ -963,13 +995,13 @@ def update_task(task_id):
             audio_id = str(uuid.uuid4())
             cursor.execute("""
                 INSERT INTO task_audio_notes (
-                    audio_id, task_id, audio_data, duration, created_by
+                    audio_id, task_id, file_path, duration, created_by
                 )
                 VALUES (%s, %s, %s, %s, %s)
             """, (
                 audio_id,
                 task_id,
-                audio_note.get('audio_data'),
+                audio_note.get('file_path'),
                 audio_note.get('duration', 0),
                 updated_by
             ))
@@ -1078,7 +1110,7 @@ def get_task_voice_notes(task_id):
         cursor = conn.cursor(dictionary=True)
         
         cursor.execute("""
-            SELECT audio_data, duration, created_by, file_name, created_at
+            SELECT file_path, duration, created_by, file_name, created_at
             FROM task_audio_notes
             WHERE task_id = %s
             ORDER BY created_at DESC
@@ -1092,7 +1124,7 @@ def get_task_voice_notes(task_id):
         formatted_notes = []
         for note in notes:
             formatted_note = {
-                'audio_data': base64.b64encode(note['audio_data']).decode('utf-8'),
+                'file_path': note['file_path'],
                 'duration': note['duration'],
                 'created_by': note['created_by'],
                 'file_name': note['file_name'],
@@ -1417,4 +1449,37 @@ if __name__ == '__main__':
     initialize_application()
     
     # Run the server
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True, use_reloader=False) 
+    socketio.run(app, host='0.0.0.0', port=5000, debug=True, use_reloader=False)
+
+def cleanup_task_files(task_id):
+    """Clean up files associated with a task when it's deleted"""
+    try:
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor(dictionary=True)
+        
+        # Get audio files
+        cursor.execute("""
+            SELECT file_path
+            FROM task_audio_notes
+            WHERE task_id = %s
+        """, (task_id,))
+        
+        audio_files = cursor.fetchall()
+        
+        # Delete audio files from filesystem
+        for audio in audio_files:
+            file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), audio['file_path'])
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    logger.info(f"Deleted audio file: {file_path}")
+            except Exception as e:
+                logger.error(f"Error deleting audio file {file_path}: {str(e)}")
+        
+    except Exception as e:
+        logger.error(f"Error cleaning up task files: {str(e)}")
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close() 
