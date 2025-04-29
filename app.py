@@ -224,8 +224,10 @@ def init_db():
                 file_path VARCHAR(255) NOT NULL,
                 file_name VARCHAR(255) NOT NULL DEFAULT 'voice_note.wav',
                 duration INT,
+                created_by VARCHAR(100),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
+                FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE,
+                FOREIGN KEY (created_by) REFERENCES users(username) ON DELETE SET NULL ON UPDATE CASCADE
             )
         """)
 
@@ -580,9 +582,9 @@ def create_task():
                 # Store the relative path in database
                 relative_path = os.path.join('uploads', 'audio', filename)
                 cursor.execute("""
-                    INSERT INTO task_audio_notes (audio_id, task_id, file_path, duration, file_name)
-                    VALUES (%s, %s, %s, %s, %s)
-                """, (audio_id, task_id, relative_path, audio_duration, original_filename))
+                    INSERT INTO task_audio_notes (audio_id, task_id, file_path, duration, file_name, created_by)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, (audio_id, task_id, relative_path, audio_duration, original_filename, assigned_by))
                 
                 logger.info(f"Audio note saved with ID: {audio_id} at path: {relative_path}")
             except Exception as e:
