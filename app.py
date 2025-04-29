@@ -949,11 +949,12 @@ def get_audio_note(task_id):
                     'message': 'Audio file not found on server'
                 }), 404
             
+            # Stream the file instead of forcing download
             return send_file(
                 file_path,
-                mimetype='audio/wav',  # You might want to detect the actual mime type
-                as_attachment=True,
-                download_name=audio['file_name']
+                mimetype='audio/wav',
+                as_attachment=False,  # Changed to False to enable streaming
+                conditional=True      # Enable conditional requests
             )
         else:
             return jsonify({
