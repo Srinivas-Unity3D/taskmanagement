@@ -19,10 +19,12 @@ load_dotenv()
 # Configure upload folder
 UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
 AUDIO_FOLDER = os.path.join(UPLOAD_FOLDER, 'audio')
+ATTACHMENTS_FOLDER = os.path.join(UPLOAD_FOLDER, 'attachments')
 ALLOWED_AUDIO_EXTENSIONS = {'wav', 'mp3', 'm4a', 'ogg'}
 
 # Create upload directories if they don't exist
 os.makedirs(AUDIO_FOLDER, exist_ok=True)
+os.makedirs(ATTACHMENTS_FOLDER, exist_ok=True)
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
@@ -241,7 +243,7 @@ def init_db():
                 file_name VARCHAR(255) NOT NULL,
                 file_type VARCHAR(50),
                 file_size BIGINT,
-                file_data LONGBLOB NOT NULL,
+                file_path VARCHAR(255) NOT NULL,
                 created_by VARCHAR(100),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE ON UPDATE CASCADE,
@@ -537,15 +539,32 @@ def create_task():
 
         # Handle attachments
         for attachment in attachments:
-            file_data = base64.b64decode(attachment.get('data', ''))
-            file_name = attachment.get('name', 'unnamed_file')
-            file_type = attachment.get('type', 'application/octet-stream')
-            file_size = attachment.get('size', 0)
-            
-            cursor.execute("""
-                INSERT INTO task_attachments (task_id, file_data, file_name, file_type, file_size, created_by)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """, (task_id, file_data, file_name, file_type, file_size, assigned_by))
+            try:
+                attachment_id = str(uuid.uuid4())
+                file_data = base64.b64decode(attachment.get('data', ''))
+                file_name = attachment.get('name', 'unnamed_file')
+                file_type = attachment.get('type', 'application/octet-stream')
+                file_size = attachment.get('size', 0)
+                
+                # Ensure filename is secure and unique
+                filename = secure_filename(f"{attachment_id}_{file_name}")
+                file_path = os.path.join(ATTACHMENTS_FOLDER, filename)
+                
+                # Save the file
+                with open(file_path, 'wb') as f:
+                    f.write(file_data)
+                
+                # Store the relative path in database
+                relative_path = os.path.join('uploads', 'attachments', filename)
+                cursor.execute("""
+                    INSERT INTO task_attachments (attachment_id, task_id, file_name, file_type, file_size, file_path, created_by)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """, (attachment_id, task_id, file_name, file_type, file_size, relative_path, assigned_by))
+                
+                logger.info(f"Attachment saved with ID: {attachment_id} at path: {relative_path}")
+            except Exception as e:
+                logger.error(f"Error saving attachment: {str(e)}")
+                raise
 
         # Handle alarm settings
         if alarm_settings:
@@ -749,15 +768,21 @@ def get_attachment(attachment_id):
         cursor = conn.cursor(dictionary=True)
 
         cursor.execute("""
-            SELECT file_name, file_type, file_size, file_data
+            SELECT file_name, file_type, file_size, file_path
             FROM task_attachments
             WHERE attachment_id = %s
         """, (attachment_id,))
 
         attachment = cursor.fetchone()
         if attachment:
-            # Create a BytesIO object from the binary data
-            file_data = io.BytesIO(attachment['file_data'])
+            # Get the full file path
+            file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), attachment['file_path'])
+            
+            if not os.path.exists(file_path):
+                return jsonify({
+                    'success': False,
+                    'message': 'Attachment file not found on server'
+                }), 404
             
             # Determine the correct mimetype based on file type
             file_type = attachment['file_type'].lower()
@@ -778,7 +803,7 @@ def get_attachment(attachment_id):
             
             # Send the file with proper mimetype
             return send_file(
-                file_data,
+                file_path,
                 mimetype=mimetype,
                 as_attachment=True,
                 download_name=attachment['file_name']
@@ -1027,7 +1052,7 @@ def update_task(task_id):
                     attachment.get('file_name', ''),
                     attachment.get('file_type', ''),
                     attachment.get('file_size', 0),
-                    attachment.get('file_data', ''),
+                    attachment.get('file_path', ''),
                     updated_by
                 ))
 
@@ -1035,7 +1060,7 @@ def update_task(task_id):
                 cursor.executemany("""
                     INSERT INTO task_attachments (
                         attachment_id, task_id, file_name, file_type,
-                        file_size, file_data, created_by
+                        file_size, file_path, created_by
                     )
                     VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """, attachment_values)
