@@ -538,28 +538,39 @@ def create_task():
                 raise
 
         # Handle attachments
+        attachments = request.files.getlist('attachments')
         for attachment in attachments:
             try:
                 attachment_id = str(uuid.uuid4())
-                file_data = base64.b64decode(attachment.get('data', ''))
-                file_name = attachment.get('name', 'unnamed_file')
-                file_type = attachment.get('type', 'application/octet-stream')
-                file_size = attachment.get('size', 0)
-                
-                # Ensure filename is secure and unique
-                filename = secure_filename(f"{attachment_id}_{file_name}")
+                filename = secure_filename(f"{attachment_id}_{attachment.filename}")
                 file_path = os.path.join(ATTACHMENTS_FOLDER, filename)
                 
                 # Save the file
-                with open(file_path, 'wb') as f:
-                    f.write(file_data)
+                attachment.save(file_path)
+                
+                # Get file size
+                file_size = os.path.getsize(file_path)
+                
+                # Get file type from filename
+                file_type = os.path.splitext(filename)[1][1:].lower()
                 
                 # Store the relative path in database
                 relative_path = os.path.join('uploads', 'attachments', filename)
                 cursor.execute("""
-                    INSERT INTO task_attachments (attachment_id, task_id, file_name, file_type, file_size, file_path, created_by)
+                    INSERT INTO task_attachments (
+                        attachment_id, task_id, file_name, file_type,
+                        file_size, file_path, created_by
+                    )
                     VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """, (attachment_id, task_id, file_name, file_type, file_size, relative_path, assigned_by))
+                """, (
+                    attachment_id,
+                    task_id,
+                    attachment.filename,
+                    file_type,
+                    file_size,
+                    relative_path,
+                    assigned_by
+                ))
                 
                 logger.info(f"Attachment saved with ID: {attachment_id} at path: {relative_path}")
             except Exception as e:
@@ -785,7 +796,7 @@ def get_attachment(attachment_id):
                 }), 404
             
             # Determine the correct mimetype based on file type
-            file_type = attachment['file_type'].lower()
+            file_type = attachment['file_type'].lower() if attachment['file_type'] else ''
             if file_type in ['jpg', 'jpeg']:
                 mimetype = 'image/jpeg'
             elif file_type == 'png':
@@ -1187,6 +1198,7 @@ def get_task_attachments(task_id):
                 file_name,
                 file_type,
                 file_size,
+                file_path,
                 created_by,
                 created_at
             FROM task_attachments
@@ -1228,26 +1240,31 @@ def download_attachment(attachment_id):
         cursor = conn.cursor(dictionary=True)
 
         cursor.execute("""
-            SELECT file_name, file_type, file_data
+            SELECT file_name, file_type, file_path
             FROM task_attachments
             WHERE attachment_id = %s
         """, (attachment_id,))
 
         attachment = cursor.fetchone()
-        if not attachment:
+        if not attachment or not attachment['file_path']:
             return jsonify({
                 'success': False,
-                'message': 'Attachment not found'
+                'message': 'Attachment not found or file path is missing'
             }), 404
 
-        return jsonify({
-            'success': True,
-            'data': {
-                'file_name': attachment['file_name'],
-                'file_type': attachment['file_type'],
-                'file_data': attachment['file_data']
-            }
-        }), 200
+        file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), attachment['file_path'])
+        
+        if not os.path.exists(file_path):
+            return jsonify({
+                'success': False,
+                'message': 'Attachment file not found on server'
+            }), 404
+
+        return send_file(
+            file_path,
+            as_attachment=True,
+            download_name=attachment['file_name']
+        )
 
     except Exception as e:
         logger.error(f"Error downloading attachment: {str(e)}")
