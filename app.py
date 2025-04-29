@@ -295,18 +295,43 @@ def update_tasks_table():
 
         # Add alarm-related columns if they don't exist
         try:
+            # Check if columns exist
             cursor.execute("""
-                ALTER TABLE tasks
-                ADD COLUMN IF NOT EXISTS start_date DATE,
-                ADD COLUMN IF NOT EXISTS start_time TIME,
-                ADD COLUMN IF NOT EXISTS frequency VARCHAR(50)
-            """)
-            logger.info("Added alarm-related columns")
+                SELECT COUNT(*) as count
+                FROM information_schema.columns
+                WHERE table_schema = %s
+                AND table_name = 'tasks'
+                AND column_name IN ('start_date', 'start_time', 'frequency')
+            """, (db_config['database'],))
+            
+            result = cursor.fetchone()
+            if result[0] < 3:  # If any column is missing
+                # Add columns one by one
+                try:
+                    cursor.execute("ALTER TABLE tasks ADD COLUMN start_date DATE")
+                except mysql.connector.Error as e:
+                    if e.errno != 1060:  # Ignore "column already exists" error
+                        raise e
+                
+                try:
+                    cursor.execute("ALTER TABLE tasks ADD COLUMN start_time TIME")
+                except mysql.connector.Error as e:
+                    if e.errno != 1060:
+                        raise e
+                
+                try:
+                    cursor.execute("ALTER TABLE tasks ADD COLUMN frequency VARCHAR(50)")
+                except mysql.connector.Error as e:
+                    if e.errno != 1060:
+                        raise e
+                
+                conn.commit()
+                logger.info("Added alarm-related columns")
         except mysql.connector.Error as e:
-            if e.errno != 1060:  # Ignore "column already exists" error
-                raise e
+            logger.error(f"Error adding alarm columns: {str(e)}")
+            raise e
 
-        # Check if columns exist first
+        # Check if timestamp columns exist
         cursor.execute("""
             SELECT COUNT(*) as count
             FROM information_schema.columns
@@ -319,11 +344,10 @@ def update_tasks_table():
         if result[0] < 2:  # If either column is missing
             logger.info("Adding timestamp columns to tasks table...")
 
-            # Add columns one by one to handle cases where one might exist
             try:
                 cursor.execute("""
                     ALTER TABLE tasks
-                    ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 """)
                 logger.info("Added created_at column")
             except mysql.connector.Error as e:
@@ -333,7 +357,7 @@ def update_tasks_table():
             try:
                 cursor.execute("""
                     ALTER TABLE tasks
-                    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                    ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
                 """)
                 logger.info("Added updated_at column")
             except mysql.connector.Error as e:
@@ -1586,6 +1610,5 @@ if __name__ == '__main__':
         host='0.0.0.0', 
         port=5000, 
         debug=True, 
-        use_reloader=False,
-        allow_unsafe_werkzeug=True
+        use_reloader=False
     ) 
