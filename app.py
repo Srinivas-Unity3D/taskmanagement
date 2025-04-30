@@ -116,6 +116,14 @@ def notify_task_update(task_data, event_type='task_update'):
         sender = cursor.fetchone()
         sender_role = sender['role'] if sender else 'Unknown'
         
+        # Prepare notification data
+        notification_data = {
+            'type': event_type,
+            'task': task_data,
+            'sender': assigned_by,
+            'target_user': assigned_to
+        }
+        
         # Store notification for assigned user
         if assigned_to:
             store_notification(task_data, event_type, assigned_to, sender_role)
@@ -123,10 +131,7 @@ def notify_task_update(task_data, event_type='task_update'):
             # Send real-time notification if user is connected
             if assigned_to in connected_users:
                 logger.info(f"Sending notification to assigned user: {assigned_to}")
-                socketio.emit('task_notification', {
-                    'type': event_type,
-                    'task': task_data
-                }, room=connected_users[assigned_to])
+                socketio.emit('task_notification', notification_data, room=connected_users[assigned_to])
             else:
                 logger.info(f"Assigned user not connected: {assigned_to}")
 
@@ -137,17 +142,11 @@ def notify_task_update(task_data, event_type='task_update'):
             # Send real-time notification if user is connected
             if assigned_by in connected_users:
                 logger.info(f"Sending notification to assigner: {assigned_by}")
-                socketio.emit('task_notification', {
-                    'type': event_type,
-                    'task': task_data
-                }, room=connected_users[assigned_by])
+                socketio.emit('task_notification', notification_data, room=connected_users[assigned_by])
 
         # Broadcast dashboard update to all connected users
         logger.info("Broadcasting dashboard update to all users")
-        socketio.emit('dashboard_update', {
-            'type': event_type,
-            'task': task_data
-        }, broadcast=True)
+        socketio.emit('dashboard_update', notification_data, broadcast=True)
         
         logger.info("Notification sent successfully")
     except Exception as e:
