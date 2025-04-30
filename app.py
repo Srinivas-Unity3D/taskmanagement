@@ -1484,7 +1484,7 @@ def store_notification(task_data, event_type, target_user, sender_role):
             return
 
         title = 'Task Updated' if event_type == 'task_updated' else 'New Task Assignment'
-        description = f"{task_data['title']} {'updated' if event_type == 'task_updated' else 'assigned'} by {task_data['assigned_by']}"
+        description = f"{task_data['title']} {'updated' if event_type == 'task_updated' else 'assigned'} by {task_data['updated_by'] if event_type == 'task_updated' else task_data['assigned_by']}"
 
         logger.info(f"Storing notification - Task ID: {task_id}, Target User: {target_user}")
 
@@ -1499,7 +1499,7 @@ def store_notification(task_data, event_type, target_user, sender_role):
             task_id,
             title,
             description,
-            task_data['assigned_by'],
+            task_data['updated_by'] if event_type == 'task_updated' else task_data['assigned_by'],
             sender_role,
             'task',
             target_user
