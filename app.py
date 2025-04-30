@@ -89,13 +89,12 @@ def handle_connect():
 def handle_disconnect():
     user = next((username for username, sid in connected_users.items() if sid == request.sid), None)
     if user:
+        logger.info(f"User disconnected: {user} ({request.sid})")
         del connected_users[user]
-        logger.info(f"Client disconnected: {user} ({request.sid})")
-    else:
-        logger.info(f"Unknown client disconnected: {request.sid}")
 
 @socketio.on('register')
 def handle_register(username):
+    # Store the user's socket ID
     connected_users[username] = request.sid
     logger.info(f"User registered: {username} ({request.sid})")
     socketio.emit('register_response', {'status': 'registered', 'username': username}, room=request.sid)
@@ -121,7 +120,8 @@ def notify_task_update(task_data, event_type='task_update'):
             'type': event_type,
             'task': task_data,
             'sender': assigned_by,
-            'target_user': assigned_to
+            'target_user': assigned_to,
+            'timestamp': datetime.now().isoformat()
         }
         
         # Store notification for assigned user
@@ -146,6 +146,7 @@ def notify_task_update(task_data, event_type='task_update'):
 
         # Broadcast dashboard update to all connected users
         logger.info("Broadcasting dashboard update to all users")
+        logger.info(f"Connected users: {list(connected_users.keys())}")
         socketio.emit('dashboard_update', notification_data, broadcast=True)
         
         logger.info("Notification sent successfully")
