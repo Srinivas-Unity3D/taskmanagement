@@ -113,7 +113,7 @@ def notify_task_update(task_data, event_type='task_update'):
     cursor = None
     try:
         conn = get_db_connection()
-        cursor = conn.cursor()
+        cursor = conn.cursor(dictionary=True)
         
         assigned_to = task_data.get('assigned_to')
         assigned_by = task_data.get('assigned_by')
@@ -121,7 +121,8 @@ def notify_task_update(task_data, event_type='task_update'):
         
         # Get sender's role
         cursor.execute("SELECT role FROM users WHERE username = %s", (updated_by or assigned_by,))
-        sender_role = cursor.fetchone()[0] if cursor.rowcount > 0 else 'User'
+        result = cursor.fetchone()
+        sender_role = result['role'] if result else 'User'
         
         notification_data = {
             'task': task_data,
@@ -130,40 +131,18 @@ def notify_task_update(task_data, event_type='task_update'):
             'timestamp': datetime.now().isoformat()
         }
         
-        logger.info(f"Preparing to send notification: {notification_data}")
+        # Store notification in database
+        store_notification(task_data, event_type, assigned_to, sender_role)
         
-        # Only send notification to assigned_to if they didn't make the update
-        if assigned_to and assigned_to != updated_by:
-            store_notification(task_data, event_type, assigned_to, sender_role)
-            
-            # Send real-time notification if user is connected
-            if assigned_to in connected_users:
-                logger.info(f"Sending notification to assignee: {assigned_to}")
-                socketio.emit('task_notification', notification_data, room=connected_users[assigned_to])
+        # Emit socket event to relevant users
+        socketio.emit('task_notification', notification_data, room=assigned_to)
         
-        # Store notification for assigner if they didn't make the update
-        if assigned_by and assigned_by != updated_by and assigned_by != assigned_to:
-            store_notification(task_data, event_type, assigned_by, sender_role)
-            
-            # Send real-time notification if user is connected
-            if assigned_by in connected_users:
-                logger.info(f"Sending notification to assigner: {assigned_by}")
-                socketio.emit('task_notification', notification_data, room=connected_users[assigned_by])
+        logger.info(f"Notification sent for task {task_data.get('task_id')} to {assigned_to}")
         
-        # Only broadcast dashboard update to users who didn't make the update
-        for user in connected_users:
-            if user != updated_by:
-                logger.info(f"Sending dashboard update to user: {user}")
-                socketio.emit('dashboard_update', notification_data, room=connected_users[user])
-        
-        logger.info("Notification sent successfully")
-    except mysql.connector.Error as db_err:
-        logger.error(f"Database error in notify_task_update: {db_err}")
-        raise
     except Exception as e:
-        logger.error(f"Error in notify_task_update: {e}")
-        logger.exception("Full traceback:")
+        logger.error(f"Error in notify_task_update: {str(e)}")
         raise
+        
     finally:
         if cursor:
             cursor.close()
@@ -1082,7 +1061,8 @@ def update_task(task_id):
             if field not in data:
                 return jsonify({
                     'success': False,
-                    'message': f'Missing required field: {field}'
+                    'message': f'Missing required field: {field}',
+                    'task_id': task_id
                 }), 400
 
         priority = data['priority']
@@ -1096,7 +1076,8 @@ def update_task(task_id):
             return jsonify({
                 'success': False,
                 'message': 'Invalid priority value',
-                'valid_priorities': valid_priorities
+                'valid_priorities': valid_priorities,
+                'task_id': task_id
             }), 400
 
         # Validate status
@@ -1105,11 +1086,12 @@ def update_task(task_id):
             return jsonify({
                 'success': False,
                 'message': 'Invalid status value',
-                'valid_statuses': valid_statuses
+                'valid_statuses': valid_statuses,
+                'task_id': task_id
             }), 400
 
         # Initialize database connection
-        conn = mysql.connector.connect(**db_config)
+        conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
 
         # Get current task data
@@ -1121,7 +1103,8 @@ def update_task(task_id):
         if not current_task:
             return jsonify({
                 'success': False,
-                'message': 'Task not found'
+                'message': 'Task not found',
+                'task_id': task_id
             }), 404
 
         # Update task
@@ -1512,36 +1495,36 @@ def store_notification(task_data, event_type, target_user, sender_role):
         logger.info(f"Storing notification - Task ID: {task_id}, Target User: {target_user}")
 
         cursor.execute("""
-            INSERT INTO task_notifications (
-                id, task_id, title, description, sender_name,
-                sender_role, type, target_user
+            INSERT INTO notifications (
+                notification_id, task_id, title, description,
+                target_user, sender_role, event_type, created_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
         """, (
             notification_id,
             task_id,
             title,
             description,
-            task_data['updated_by'] if event_type == 'task_updated' else task_data['assigned_by'],
+            target_user,
             sender_role,
-            'task',
-            target_user
+            event_type
         ))
 
         conn.commit()
-        logger.info(f"Successfully stored notification: {notification_id}")
+        logger.info(f"Notification stored successfully - ID: {notification_id}")
 
     except mysql.connector.Error as db_err:
         logger.error(f"Database error in store_notification: {db_err}")
         if conn:
             conn.rollback()
         raise
+
     except Exception as e:
-        logger.error(f"Error storing notification: {e}")
-        logger.exception("Full traceback:")
+        logger.error(f"Error storing notification: {str(e)}")
         if conn:
             conn.rollback()
         raise
+
     finally:
         if cursor:
             cursor.close()
