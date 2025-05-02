@@ -492,34 +492,56 @@ def login():
     cursor = None
     try:
         data = request.get_json()
+        logger.info(f"Login attempt for user: {data.get('username')}")
+        
+        if not data or not data.get('username') or not data.get('password'):
+            return jsonify({'message': 'Username and password are required'}), 400
+
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor(dictionary=True)
 
+        # First verify user credentials
         cursor.execute("""
             SELECT user_id, username, email, phone, password, role, fcm_token
             FROM users WHERE username = %s AND password = %s
         """, (data['username'], data['password']))
 
         user = cursor.fetchone()
-        if user:
-            # Update FCM token if provided
-            if 'fcm_token' in data and data['fcm_token']:
+        if not user:
+            logger.warning(f"Invalid login attempt for user: {data.get('username')}")
+            return jsonify({'message': 'Invalid username or password'}), 401
+
+        # Update FCM token if provided
+        fcm_token = data.get('fcm_token')
+        if fcm_token:
+            logger.info(f"Updating FCM token for user: {user['username']}")
+            try:
                 cursor.execute("""
-                    UPDATE users SET fcm_token = %s WHERE user_id = %s
-                """, (data['fcm_token'], user['user_id']))
+                    UPDATE users 
+                    SET fcm_token = %s,
+                        updated_at = NOW()
+                    WHERE user_id = %s
+                """, (fcm_token, user['user_id']))
                 conn.commit()
-                logger.info(f"Updated FCM token for user {user['username']}")
+                logger.info(f"FCM token updated successfully for user: {user['username']}")
+            except Exception as e:
+                logger.error(f"Failed to update FCM token for user {user['username']}: {str(e)}")
+                # Don't fail the login if FCM update fails
+                conn.rollback()
+        else:
+            logger.warning(f"No FCM token provided for user: {user['username']}")
 
-            return jsonify({
-                'message': 'Login successful',
-                'user_id': user['user_id'],
-                'username': user['username'],
-                'role': user['role']
-            }), 200
+        return jsonify({
+            'message': 'Login successful',
+            'user_id': user['user_id'],
+            'username': user['username'],
+            'role': user['role'],
+            'fcm_token_updated': bool(fcm_token)
+        }), 200
 
-        return jsonify({'message': 'Invalid username or password'}), 401
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Login error: {str(e)}")
+        return jsonify({'message': f'Login failed: {str(e)}'}), 500
     finally:
         if cursor:
             cursor.close()
@@ -1689,6 +1711,64 @@ def get_fcm_token():
     except Exception as e:
         logger.error(f"Error fetching FCM token: {str(e)}")
         return jsonify({'error': str(e)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+# ---------------- UPDATE FCM TOKEN ----------------
+@app.route('/update_fcm_token', methods=['POST'])
+def update_fcm_token():
+    conn = None
+    cursor = None
+    try:
+        data = request.get_json()
+        user_id = data.get('user_id')
+        fcm_token = data.get('fcm_token')
+        
+        if not user_id or not fcm_token:
+            return jsonify({
+                'success': False,
+                'message': 'User ID and FCM token are required'
+            }), 400
+            
+        logger.info(f"Updating FCM token for user ID: {user_id}")
+        
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            UPDATE users 
+            SET fcm_token = %s,
+                updated_at = NOW()
+            WHERE user_id = %s
+        """, (fcm_token, user_id))
+        
+        if cursor.rowcount == 0:
+            logger.warning(f"No user found with ID: {user_id}")
+            return jsonify({
+                'success': False,
+                'message': 'User not found'
+            }), 404
+            
+        conn.commit()
+        logger.info(f"FCM token updated successfully for user ID: {user_id}")
+        
+        return jsonify({
+            'success': True,
+            'message': 'FCM token updated successfully'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error updating FCM token: {str(e)}")
+        if conn:
+            conn.rollback()
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500
+        
     finally:
         if cursor:
             cursor.close()
