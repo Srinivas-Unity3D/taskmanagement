@@ -728,18 +728,22 @@ def get_tasks():
                     t.priority,
                     t.status,
                     t.assigned_by,
+                    assigner.role as assigned_by_role,
                     t.assigned_to,
+                    assignee.role as assigned_to_role,
                     {timestamp_columns},
                     COUNT(DISTINCT a.attachment_id) as attachment_count,
                     COUNT(DISTINCT an.audio_id) as has_audio
                 FROM tasks t
+                JOIN users assigner ON t.assigned_by = assigner.username
+                JOIN users assignee ON t.assigned_to = assignee.username
                 LEFT JOIN task_attachments a ON t.task_id = a.task_id
                 LEFT JOIN task_audio_notes an ON t.task_id = an.task_id
                 {where_clause}
-                GROUP BY
+                GROUP BY 
                     t.task_id, t.title, t.description,
                     t.deadline, t.priority, t.status,
-                    t.assigned_by, t.assigned_to
+                    t.assigned_by, assigner.role, t.assigned_to, assignee.role
                     {group_by_timestamps}
                 ORDER BY t.deadline ASC
             """
@@ -815,7 +819,9 @@ def get_tasks():
                     'priority': task['priority'],
                     'status': task['status'],
                     'assigned_by': task['assigned_by'],
+                    'assigned_by_role': task['assigned_by_role'],
                     'assigned_to': task['assigned_to'],
+                    'assigned_to_role': task['assigned_to_role'],
                     'created_at': task['created_at'].strftime('%Y-%m-%d %H:%M:%S') if task['created_at'] else None,
                     'updated_at': task['updated_at'].strftime('%Y-%m-%d %H:%M:%S') if task['updated_at'] else None,
                     'has_audio': bool(task['has_audio']),
