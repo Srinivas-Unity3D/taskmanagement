@@ -99,8 +99,18 @@ def handle_register(username):
     logger.info(f"User registered: {username} ({request.sid})")
     socketio.emit('register_response', {'status': 'registered', 'username': username}, room=request.sid)
 
+def get_db_connection():
+    """Get a new database connection"""
+    try:
+        return mysql.connector.connect(**db_config)
+    except mysql.connector.Error as e:
+        logger.error(f"Error connecting to database: {e}")
+        raise
+
 def notify_task_update(task_data, event_type='task_update'):
     """Notify relevant users about task updates"""
+    conn = None
+    cursor = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -147,9 +157,13 @@ def notify_task_update(task_data, event_type='task_update'):
                 socketio.emit('dashboard_update', notification_data, room=connected_users[user])
         
         logger.info("Notification sent successfully")
+    except mysql.connector.Error as db_err:
+        logger.error(f"Database error in notify_task_update: {db_err}")
+        raise
     except Exception as e:
         logger.error(f"Error in notify_task_update: {e}")
         logger.exception("Full traceback:")
+        raise
     finally:
         if cursor:
             cursor.close()
@@ -1480,8 +1494,10 @@ def get_notifications():
 
 def store_notification(task_data, event_type, target_user, sender_role):
     """Store notification in database"""
+    conn = None
+    cursor = None
     try:
-        conn = mysql.connector.connect(**db_config)
+        conn = get_db_connection()
         cursor = conn.cursor()
 
         notification_id = str(uuid.uuid4())
@@ -1515,11 +1531,17 @@ def store_notification(task_data, event_type, target_user, sender_role):
         conn.commit()
         logger.info(f"Successfully stored notification: {notification_id}")
 
+    except mysql.connector.Error as db_err:
+        logger.error(f"Database error in store_notification: {db_err}")
+        if conn:
+            conn.rollback()
+        raise
     except Exception as e:
         logger.error(f"Error storing notification: {e}")
         logger.exception("Full traceback:")
         if conn:
             conn.rollback()
+        raise
     finally:
         if cursor:
             cursor.close()
