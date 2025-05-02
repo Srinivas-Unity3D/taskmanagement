@@ -119,6 +119,11 @@ def notify_task_update(task_data, event_type='task_update'):
         assigned_by = task_data.get('assigned_by')
         updated_by = task_data.get('updated_by')
         
+        # Skip if no target users
+        if not assigned_to and not assigned_by:
+            logger.info("No users to notify")
+            return
+            
         # Get sender's role
         cursor.execute("SELECT role FROM users WHERE username = %s", (updated_by or assigned_by,))
         result = cursor.fetchone()
@@ -131,13 +136,24 @@ def notify_task_update(task_data, event_type='task_update'):
             'timestamp': datetime.now().isoformat()
         }
         
-        # Store notification in database
-        store_notification(task_data, event_type, assigned_to, sender_role)
+        # Only notify assigned_to if they didn't make the update
+        if assigned_to and assigned_to != updated_by:
+            logger.info(f"Notifying assigned user: {assigned_to}")
+            store_notification(task_data, event_type, assigned_to, sender_role)
+            if assigned_to in connected_users:
+                socketio.emit('task_notification', notification_data, room=connected_users[assigned_to])
         
-        # Emit socket event to relevant users
-        socketio.emit('task_notification', notification_data, room=assigned_to)
+        # Only notify assigned_by if they didn't make the update and aren't the assignee
+        if assigned_by and assigned_by != updated_by and assigned_by != assigned_to:
+            logger.info(f"Notifying assigner: {assigned_by}")
+            store_notification(task_data, event_type, assigned_by, sender_role)
+            if assigned_by in connected_users:
+                socketio.emit('task_notification', notification_data, room=connected_users[assigned_by])
         
-        logger.info(f"Notification sent for task {task_data.get('task_id')} to {assigned_to}")
+        # Broadcast dashboard update to all connected users except the updater
+        for username, sid in connected_users.items():
+            if username != updated_by:
+                socketio.emit('dashboard_update', notification_data, room=sid)
         
     except Exception as e:
         logger.error(f"Error in notify_task_update: {str(e)}")
@@ -1483,6 +1499,14 @@ def store_notification(task_data, event_type, target_user, sender_role):
         conn = get_db_connection()
         cursor = conn.cursor()
 
+        # Get the user who made the update
+        updated_by = task_data.get('updated_by')
+        
+        # Don't store notification if target_user is the one who made the update
+        if updated_by and target_user == updated_by:
+            logger.info(f"Skipping notification for updater: {updated_by}")
+            return
+
         notification_id = str(uuid.uuid4())
         task_id = task_data.get('task_id')
         if not task_id:
@@ -1492,6 +1516,11 @@ def store_notification(task_data, event_type, target_user, sender_role):
         title = 'Task Updated' if event_type == 'task_updated' else 'New Task Assignment'
         description = f"{task_data['title']} {'updated' if event_type == 'task_updated' else 'assigned'} by {task_data['updated_by'] if event_type == 'task_updated' else task_data['assigned_by']}"
         sender_name = task_data['updated_by'] if event_type == 'task_updated' else task_data['assigned_by']
+
+        # Skip if sender is the target
+        if sender_name == target_user:
+            logger.info(f"Skipping notification as sender is target: {target_user}")
+            return
 
         logger.info(f"Storing notification - Task ID: {task_id}, Target User: {target_user}")
 
