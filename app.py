@@ -1057,6 +1057,8 @@ def get_task_assignments(user_id):
 # ---------------- UPDATE TASK ----------------
 @app.route('/tasks/<task_id>', methods=['PUT'])
 def update_task(task_id):
+    conn = None
+    cursor = None
     try:
         data = request.get_json()
         
@@ -1092,6 +1094,7 @@ def update_task(task_id):
                 'valid_statuses': valid_statuses
             }), 400
 
+        # Initialize database connection
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor(dictionary=True)
 
@@ -1182,6 +1185,7 @@ def update_task(task_id):
                 task_id
             ))
 
+        # Commit all database changes
         conn.commit()
 
         # Prepare notification data
