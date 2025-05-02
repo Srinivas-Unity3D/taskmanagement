@@ -1653,6 +1653,48 @@ def cleanup_task_files(task_id):
         if conn:
             conn.close()
 
+# ---------------- GET FCM TOKEN ----------------
+@app.route('/get_fcm_token', methods=['POST'])
+def get_fcm_token():
+    conn = None
+    cursor = None
+    try:
+        # Extract username from the request body
+        data = request.get_json()
+        username = data.get('username') if data else None
+        if not username:
+            return jsonify({'message': 'Username is required'}), 400
+
+        # Connect to the database
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor(dictionary=True)
+
+        # Look up the userid for the given username
+        cursor.execute("SELECT user_id FROM users WHERE username = %s", (username,))
+        user = cursor.fetchone()
+        if not user:
+            return jsonify({'message': f'User {username} not found'}), 404
+
+        userid = user['user_id']
+
+        # Fetch the most recent FCM token for the userid
+        cursor.execute("SELECT fcm_token FROM users WHERE user_id = %s ORDER BY created_at DESC LIMIT 1", (userid,))
+        token_record = cursor.fetchone()
+
+        # Check if a token was found
+        if token_record and token_record['fcm_token']:
+            return jsonify({'fcm_token': token_record['fcm_token']}), 200
+        else:
+            return jsonify({'message': 'No FCM token found for this user'}), 404
+    except Exception as e:
+        logger.error(f"Error fetching FCM token: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
 # ---------------- MAIN ----------------
 if __name__ == '__main__':
     # Initialize the application
