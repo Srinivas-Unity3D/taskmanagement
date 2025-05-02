@@ -102,52 +102,49 @@ def handle_register(username):
 def notify_task_update(task_data, event_type='task_update'):
     """Notify relevant users about task updates"""
     try:
-        logger.info(f"Notifying task update - Type: {event_type}, Task: {task_data}")
+        conn = get_db_connection()
+        cursor = conn.cursor()
         
-        # Get the assigned user's socket ID and role
         assigned_to = task_data.get('assigned_to')
         assigned_by = task_data.get('assigned_by')
+        updated_by = task_data.get('updated_by')
         
         # Get sender's role
-        conn = mysql.connector.connect(**db_config)
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT role FROM users WHERE username = %s", (assigned_by,))
-        sender = cursor.fetchone()
-        sender_role = sender['role'] if sender else 'Unknown'
+        cursor.execute("SELECT role FROM users WHERE username = %s", (updated_by or assigned_by,))
+        sender_role = cursor.fetchone()[0] if cursor.rowcount > 0 else 'User'
         
-        # Prepare notification data
         notification_data = {
-            'type': event_type,
             'task': task_data,
-            'sender': assigned_by,
-            'target_user': assigned_to,
+            'type': event_type,
+            'sender_role': sender_role,
             'timestamp': datetime.now().isoformat()
         }
         
-        # Store notification for assigned user
-        if assigned_to:
+        logger.info(f"Preparing to send notification: {notification_data}")
+        
+        # Only send notification to assigned_to if they didn't make the update
+        if assigned_to and assigned_to != updated_by:
             store_notification(task_data, event_type, assigned_to, sender_role)
             
             # Send real-time notification if user is connected
             if assigned_to in connected_users:
-                logger.info(f"Sending notification to assigned user: {assigned_to}")
+                logger.info(f"Sending notification to assignee: {assigned_to}")
                 socketio.emit('task_notification', notification_data, room=connected_users[assigned_to])
-            else:
-                logger.info(f"Assigned user not connected: {assigned_to}")
-
-        # Store notification for assigner if different from assignee
-        if assigned_by and assigned_by != assigned_to:
+        
+        # Store notification for assigner if they didn't make the update
+        if assigned_by and assigned_by != updated_by and assigned_by != assigned_to:
             store_notification(task_data, event_type, assigned_by, sender_role)
             
             # Send real-time notification if user is connected
             if assigned_by in connected_users:
                 logger.info(f"Sending notification to assigner: {assigned_by}")
                 socketio.emit('task_notification', notification_data, room=connected_users[assigned_by])
-
-        # Broadcast dashboard update to all connected users
-        logger.info("Broadcasting dashboard update to all users")
-        logger.info(f"Connected users: {list(connected_users.keys())}")
-        socketio.emit('dashboard_update', notification_data, broadcast=True)
+        
+        # Only broadcast dashboard update to users who didn't make the update
+        for user in connected_users:
+            if user != updated_by:
+                logger.info(f"Sending dashboard update to user: {user}")
+                socketio.emit('dashboard_update', notification_data, room=connected_users[user])
         
         logger.info("Notification sent successfully")
     except Exception as e:
