@@ -1491,23 +1491,25 @@ def store_notification(task_data, event_type, target_user, sender_role):
 
         title = 'Task Updated' if event_type == 'task_updated' else 'New Task Assignment'
         description = f"{task_data['title']} {'updated' if event_type == 'task_updated' else 'assigned'} by {task_data['updated_by'] if event_type == 'task_updated' else task_data['assigned_by']}"
+        sender_name = task_data['updated_by'] if event_type == 'task_updated' else task_data['assigned_by']
 
         logger.info(f"Storing notification - Task ID: {task_id}, Target User: {target_user}")
 
         cursor.execute("""
-            INSERT INTO notifications (
-                notification_id, task_id, title, description,
-                target_user, sender_role, event_type, created_at
+            INSERT INTO task_notifications (
+                id, task_id, title, description, sender_name,
+                sender_role, type, target_user, created_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
         """, (
             notification_id,
             task_id,
             title,
             description,
-            target_user,
+            sender_name,
             sender_role,
-            event_type
+            event_type,
+            target_user
         ))
 
         conn.commit()
