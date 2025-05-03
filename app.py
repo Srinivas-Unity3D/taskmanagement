@@ -85,19 +85,45 @@ def handle_connect():
     logger.info(f"Client connected: {request.sid}")
     socketio.emit('connect_response', {'status': 'connected', 'sid': request.sid}, room=request.sid)
 
+@socketio.on('register')
+def handle_register(data):
+    try:
+        username = data.get('username')
+        if not username:
+            logger.error("No username provided for registration")
+            return
+        
+        logger.info(f"Registering user {username} with sid {request.sid}")
+        connected_users[username] = request.sid
+        logger.info(f"Current connected users: {connected_users}")
+        
+        socketio.emit('register_response', {
+            'status': 'registered',
+            'username': username,
+            'sid': request.sid
+        }, room=request.sid)
+    except Exception as e:
+        logger.error(f"Error in handle_register: {str(e)}")
+
 @socketio.on('disconnect')
 def handle_disconnect():
-    user = next((username for username, sid in connected_users.items() if sid == request.sid), None)
-    if user:
-        logger.info(f"User disconnected: {user} ({request.sid})")
-        del connected_users[user]
-
-@socketio.on('register')
-def handle_register(username):
-    # Store the user's socket ID
-    connected_users[username] = request.sid
-    logger.info(f"User registered: {username} ({request.sid})")
-    socketio.emit('register_response', {'status': 'registered', 'username': username}, room=request.sid)
+    try:
+        sid = request.sid
+        # Find and remove the disconnected user
+        username_to_remove = None
+        for username, connected_sid in connected_users.items():
+            if connected_sid == sid:
+                username_to_remove = username
+                break
+        
+        if username_to_remove:
+            logger.info(f"User {username_to_remove} disconnected")
+            del connected_users[username_to_remove]
+        
+        logger.info(f"Client disconnected: {sid}")
+        logger.info(f"Current connected users: {connected_users}")
+    except Exception as e:
+        logger.error(f"Error in handle_disconnect: {str(e)}")
 
 def get_db_connection():
     """Get a new database connection"""
