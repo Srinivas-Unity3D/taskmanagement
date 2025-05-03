@@ -162,24 +162,24 @@ def notify_task_update(task_data, event_type='task_update'):
             'timestamp': datetime.now().isoformat()
         }
         
-        # Only notify assigned_to if they didn't make the update
-        if assigned_to and assigned_to != updated_by:
+        # Notify assigned_to if they exist
+        if assigned_to:
             logger.info(f"Notifying assigned user: {assigned_to}")
             store_notification(task_data, event_type, assigned_to, sender_role)
             if assigned_to in connected_users:
                 socketio.emit('task_notification', notification_data, room=connected_users[assigned_to])
         
-        # Only notify assigned_by if they didn't make the update and aren't the assignee
-        if assigned_by and assigned_by != updated_by and assigned_by != assigned_to:
+        # Notify assigned_by if they exist
+        if assigned_by:
             logger.info(f"Notifying assigner: {assigned_by}")
             store_notification(task_data, event_type, assigned_by, sender_role)
             if assigned_by in connected_users:
                 socketio.emit('task_notification', notification_data, room=connected_users[assigned_by])
         
-        # Broadcast dashboard update to all connected users except the updater
+        # Broadcast dashboard update to all connected users
         for username, sid in connected_users.items():
-            if username != updated_by:
-                socketio.emit('dashboard_update', notification_data, room=sid)
+            socketio.emit('dashboard_update', notification_data, room=sid)
+            logger.info(f"Broadcasting update to user: {username}")
         
     except Exception as e:
         logger.error(f"Error in notify_task_update: {str(e)}")
