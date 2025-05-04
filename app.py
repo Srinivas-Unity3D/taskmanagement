@@ -1043,17 +1043,19 @@ def get_task_assignments(user_id):
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor(dictionary=True)
 
-        # First get the user's role
-        cursor.execute("SELECT role FROM users WHERE user_id = %s", (user_id,))
+        # First get the user's role and username
+        cursor.execute("SELECT role, username FROM users WHERE user_id = %s", (user_id,))
         user = cursor.fetchone()
 
         if not user:
+            logger.warning(f"User not found: {user_id}")
             return jsonify({
                 'success': False,
                 'message': 'User not found'
             }), 404
 
         user_role = user['role'].lower()
+        username = user['username']
 
         # Base query with all fields
         base_query = """
@@ -1080,14 +1082,15 @@ def get_task_assignments(user_id):
             query = base_query + " ORDER BY t.created_at DESC"
             cursor.execute(query)
         else:
-            # For regular users, only show tasks where they are assigner or assignee
+            # For regular users, show tasks where they are the assigner
             query = base_query + """
-                WHERE assigner.user_id = %s OR assignee.user_id = %s
+                WHERE t.assigned_by = %s AND t.assigned_to != %s
                 ORDER BY t.created_at DESC
             """
-            cursor.execute(query, (user_id, user_id))
+            cursor.execute(query, (username, username))
 
         assignments = cursor.fetchall()
+        logger.info(f"Found {len(assignments)} assignments for user {username} with role {user_role}")
 
         # Format dates for JSON serialization
         for assignment in assignments:
