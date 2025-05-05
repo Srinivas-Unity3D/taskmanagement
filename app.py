@@ -1374,42 +1374,31 @@ def update_task(task_id):
 @app.route('/api/tasks/<task_id>/voice-notes', methods=['GET'])
 def get_task_voice_notes(task_id):
     try:
-        conn = mysql.connector.connect(**db_config)
+        conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
-        
         cursor.execute("""
             SELECT file_path, duration, created_by, file_name, created_at
             FROM task_audio_notes
             WHERE task_id = %s
             ORDER BY created_at DESC
         """, (task_id,))
-        
         notes = cursor.fetchall()
-        
         if not notes:
             return jsonify({'message': 'No voice notes found for this task'}), 404
-            
         formatted_notes = []
         for note in notes:
             formatted_note = {
                 'file_path': note['file_path'],
                 'duration': note['duration'],
                 'created_by': note['created_by'],
-                'file_name': note['file_name'],
+                'file_name': note.get('file_name'),
                 'created_at': note['created_at'].isoformat() if note['created_at'] else None
             }
             formatted_notes.append(formatted_note)
-            
         return jsonify(formatted_notes), 200
-        
     except Exception as e:
         logger.error(f"Error fetching voice notes: {str(e)}")
         return jsonify({'error': str(e)}), 500
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
 
 # ---------------- GET TASK ATTACHMENTS ----------------
 @app.route('/tasks/<task_id>/attachments', methods=['GET'])
@@ -1481,7 +1470,7 @@ def download_attachment(attachment_id):
                 'message': 'Attachment not found or file path is missing'
             }), 404
 
-        file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), attachment['file_path'])
+        file_path = os.path.join(UPLOAD_FOLDER, attachment['file_path'])
         
         if not os.path.exists(file_path):
             return jsonify({
@@ -1757,7 +1746,7 @@ def cleanup_task_files(task_id):
         
         # Delete audio files from filesystem
         for audio in audio_files:
-            file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), audio['file_path'])
+            file_path = os.path.join(UPLOAD_FOLDER, audio['file_path'])
             try:
                 if os.path.exists(file_path):
                     os.remove(file_path)
@@ -1955,7 +1944,7 @@ def upload_file():
 def serve_audio(filename):
     try:
         # Get the absolute path to the audio file
-        audio_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads', 'audio', filename)
+        audio_path = os.path.join(UPLOAD_FOLDER, 'audio', filename)
         
         # Check if file exists
         if not os.path.exists(audio_path):
