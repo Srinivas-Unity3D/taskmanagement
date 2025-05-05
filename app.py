@@ -575,160 +575,145 @@ def login():
             conn.close()
 
 # ---------------- CREATE TASK ----------------
-@app.route('/api/tasks', methods=['POST'])
+@app.route('/tasks', methods=['POST'])
 def create_task():
     conn = None
     cursor = None
     try:
         data = request.get_json()
-        if not data:
-            return jsonify({'error': 'No JSON data provided'}), 400
-            
+        
+        # Extract task data
         title = data.get('title')
         description = data.get('description')
         assigned_to = data.get('assigned_to')
         assigned_by = data.get('assigned_by')
         deadline = data.get('deadline')
-        priority = data.get('priority')
-        status = data.get('status')
+        priority = data.get('priority', 'low')
+        status = data.get('status', 'pending')
+        alarm_settings = data.get('alarm_settings')
         audio_notes = data.get('audio_notes', [])  # Changed to handle multiple audio notes
         attachments = data.get('attachments', [])
-        alarm_settings = data.get('alarm_settings')
-
+        
         # Validate required fields
-        if not all([title, assigned_to, assigned_by, deadline, priority, status]):
-            return jsonify({'error': 'Missing required fields'}), 400
-
+        if not all([title, description, assigned_to, assigned_by, deadline]):
+            return jsonify({
+                'success': False,
+                'message': 'Missing required fields'
+            }), 400
+        
+        # Connect to database
         conn = mysql.connector.connect(**db_config)
-        cursor = conn.cursor()
-
-        # Generate UUID for task_id
+        cursor = conn.cursor(dictionary=True)
+        
+        # Create task
         task_id = str(uuid.uuid4())
-
-        # Insert task
         cursor.execute("""
             INSERT INTO tasks (
-                task_id, title, description, assigned_to, assigned_by, 
-                deadline, priority, status, start_date, start_time, frequency
+                task_id, title, description, assigned_to,
+                assigned_by, deadline, priority, status
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         """, (
-            task_id, title, description, assigned_to, assigned_by,
-            deadline, priority, status,
-            alarm_settings.get('start_date') if alarm_settings else None,
-            alarm_settings.get('start_time') if alarm_settings else None,
-            alarm_settings.get('frequency') if alarm_settings else None
+            task_id, title, description, assigned_to,
+            assigned_by, deadline, priority, status
         ))
         
-        # Handle multiple audio notes
+        # Handle alarm settings if present
+        if alarm_settings:
+            alarm_id = str(uuid.uuid4())
+            cursor.execute("""
+                INSERT INTO task_alarms (
+                    alarm_id, task_id, start_date, start_time,
+                    frequency, created_by
+                )
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (
+                alarm_id,
+                task_id,
+                alarm_settings.get('start_date'),
+                alarm_settings.get('start_time'),
+                alarm_settings.get('frequency'),
+                assigned_by
+            ))
+        
+        # Handle audio notes
         for audio_note in audio_notes:
             try:
-                audio_id = str(uuid.uuid4())
-                audio_data = audio_note.get('audio_data', '')
+                audio_id = audio_note.get('file_id', str(uuid.uuid4()))
+                file_path = audio_note.get('file_path')
                 audio_duration = audio_note.get('duration', 0)
-                original_filename = audio_note.get('filename', 'voice_note.wav')
+                file_name = audio_note.get('file_name', 'voice_note.wav')
                 
-                # Ensure filename is secure and unique
-                filename = secure_filename(f"{audio_id}_{original_filename}")
-                file_path = os.path.join(AUDIO_FOLDER, filename)
+                if not file_path:
+                    logger.warning(f"Skipping audio note without file path")
+                    continue
                 
-                # Create uploads/audio directory if it doesn't exist
-                os.makedirs(AUDIO_FOLDER, exist_ok=True)
-                
-                # Decode and save the audio file
-                audio_binary = base64.b64decode(audio_data)
-                with open(file_path, 'wb') as f:
-                    f.write(audio_binary)
-                
-                # Store the relative path in database
-                relative_path = os.path.join('uploads', 'audio', filename)
                 cursor.execute("""
-                    INSERT INTO task_audio_notes (audio_id, task_id, file_path, duration, file_name, created_by)
+                    INSERT INTO task_audio_notes (
+                        audio_id, task_id, file_path, duration,
+                        file_name, created_by
+                    )
                     VALUES (%s, %s, %s, %s, %s, %s)
-                """, (audio_id, task_id, relative_path, audio_duration, original_filename, assigned_by))
+                """, (
+                    audio_id, task_id, file_path, audio_duration,
+                    file_name, assigned_by
+                ))
                 
-                logger.info(f"Audio note saved with ID: {audio_id} at path: {relative_path}")
+                logger.info(f"Added audio note: {audio_id}")
             except Exception as e:
-                logger.error(f"Error saving audio file: {str(e)}")
-                raise
-
+                logger.error(f"Error adding audio note: {str(e)}")
+                continue
+        
         # Handle attachments
         for attachment in attachments:
             try:
-                attachment_id = str(uuid.uuid4())
-                file_name = attachment.get('filename')
+                attachment_id = attachment.get('file_id', str(uuid.uuid4()))
+                file_path = attachment.get('file_path')
+                file_name = attachment.get('file_name')
                 file_type = attachment.get('file_type')
-                file_data = attachment.get('file_data')
                 file_size = attachment.get('file_size', 0)
                 
-                if not all([file_name, file_type, file_data]):
+                if not file_path or not file_name:
+                    logger.warning(f"Skipping attachment without file path or name")
                     continue
                 
-                # Ensure filename is secure and unique
-                filename = secure_filename(f"{attachment_id}_{file_name}")
-                file_path = os.path.join(ATTACHMENTS_FOLDER, filename)
-                
-                # Create uploads/attachments directory if it doesn't exist
-                os.makedirs(ATTACHMENTS_FOLDER, exist_ok=True)
-                
-                # Decode and save the file
-                file_binary = base64.b64decode(file_data)
-                with open(file_path, 'wb') as f:
-                    f.write(file_binary)
-                
-                # Store the relative path in database
-                relative_path = os.path.join('uploads', 'attachments', filename)
                 cursor.execute("""
                     INSERT INTO task_attachments (
-                        attachment_id, task_id, file_name, file_type,
-                        file_size, file_path, created_by
+                        attachment_id, task_id, file_name,
+                        file_path, file_type, file_size,
+                        created_by
                     )
                     VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """, (
                     attachment_id,
                     task_id,
                     file_name,
+                    file_path,
                     file_type,
                     file_size,
-                    relative_path,
                     assigned_by
                 ))
                 
-                logger.info(f"Attachment saved with ID: {attachment_id} at path: {relative_path}")
+                logger.info(f"Added attachment: {attachment_id}")
             except Exception as e:
-                logger.error(f"Error saving attachment: {str(e)}")
-                raise
-
+                logger.error(f"Error adding attachment: {str(e)}")
+                continue
+        
         conn.commit()
-        
-        # Prepare notification data
-        notification_data = {
-            'task_id': task_id,
-            'title': title,
-            'description': description,
-            'assigned_to': assigned_to,
-            'assigned_by': assigned_by,
-            'priority': priority,
-            'status': status,
-            'deadline': deadline
-        }
-        
-        # Notify users about the new task
-        notify_task_update(notification_data, 'task_created')
         
         return jsonify({
             'success': True,
             'message': 'Task created successfully',
             'task_id': task_id
         }), 201
-
+        
     except Exception as e:
-        logger.error(f"Error creating task: {str(e)}")
         if conn:
             conn.rollback()
+        logger.error(f"Error creating task: {str(e)}")
         return jsonify({
             'success': False,
-            'error': str(e)
+            'message': f"Error creating task: {str(e)}"
         }), 500
     finally:
         if cursor:
@@ -1183,6 +1168,63 @@ def update_task(task_id):
             task_id
         ))
 
+        # Handle audio notes
+        if audio_notes:
+            try:
+                # First, get all current audio notes
+                cursor.execute("""
+                    SELECT audio_id, file_path
+                    FROM task_audio_notes 
+                    WHERE task_id = %s
+                """, (task_id,))
+                current_audio_notes = cursor.fetchall()
+                
+                # Delete existing audio files
+                for audio_note in current_audio_notes:
+                    file_path = os.path.join(
+                        os.path.dirname(os.path.abspath(__file__)),
+                        audio_note['file_path']
+                    )
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                        logger.info(f"Deleted audio file: {file_path}")
+                
+                # Delete existing audio note records
+                cursor.execute("DELETE FROM task_audio_notes WHERE task_id = %s", (task_id,))
+                logger.info(f"Deleted existing audio notes for task: {task_id}")
+                
+                # Add new audio notes
+                for audio_note in audio_notes:
+                    try:
+                        audio_id = audio_note.get('file_id', str(uuid.uuid4()))
+                        file_path = audio_note.get('file_path')
+                        audio_duration = audio_note.get('duration', 0)
+                        file_name = audio_note.get('file_name', 'voice_note.wav')
+                        
+                        if not file_path:
+                            logger.warning(f"Skipping audio note without file path")
+                            continue
+                        
+                        cursor.execute("""
+                            INSERT INTO task_audio_notes (
+                                audio_id, task_id, file_path, duration, 
+                                file_name, created_by
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                        """, (
+                            audio_id, task_id, file_path, audio_duration,
+                            file_name, assigned_by
+                        ))
+                        
+                        logger.info(f"Added new audio note record: {audio_id}")
+                    except Exception as e:
+                        logger.error(f"Error processing new audio note: {str(e)}")
+                        continue
+            
+            except Exception as e:
+                logger.error(f"Error handling audio notes: {str(e)}")
+                raise
+
         # Handle attachments
         if new_attachments or existing_attachment_ids:
             try:
@@ -1223,48 +1265,30 @@ def update_task(task_id):
                 # Add new attachments
                 for attachment in new_attachments:
                     try:
-                        attachment_id = str(uuid.uuid4())
-                        file_name = attachment.get('filename')
+                        attachment_id = attachment.get('file_id', str(uuid.uuid4()))
+                        file_path = attachment.get('file_path')
+                        file_name = attachment.get('file_name')
                         file_type = attachment.get('file_type')
-                        file_data = attachment.get('file_data')
                         file_size = attachment.get('file_size', 0)
                         
-                        if not all([file_name, file_type, file_data]):
-                            logger.warning(f"Skipping invalid attachment: {file_name}")
+                        if not file_path or not file_name:
+                            logger.warning(f"Skipping attachment without file path or name")
                             continue
                         
-                        # Ensure filename is secure and unique
-                        filename = secure_filename(f"{attachment_id}_{file_name}")
-                        file_path = os.path.join(ATTACHMENTS_FOLDER, filename)
-                        
-                        # Create uploads/attachments directory if it doesn't exist
-                        os.makedirs(ATTACHMENTS_FOLDER, exist_ok=True)
-                        
-                        # Decode and save the file
-                        try:
-                            file_binary = base64.b64decode(file_data)
-                            with open(file_path, 'wb') as f:
-                                f.write(file_binary)
-                            logger.info(f"Saved new attachment: {file_path}")
-                        except Exception as e:
-                            logger.error(f"Error saving file {filename}: {str(e)}")
-                            continue
-                        
-                        # Store the relative path in database
-                        relative_path = os.path.join('uploads', 'attachments', filename)
                         cursor.execute("""
                             INSERT INTO task_attachments (
-                                attachment_id, task_id, file_name, file_type,
-                                file_size, file_path, created_by
+                                attachment_id, task_id, file_name,
+                                file_path, file_type, file_size,
+                                created_by
                             )
                             VALUES (%s, %s, %s, %s, %s, %s, %s)
                         """, (
                             attachment_id,
                             task_id,
                             file_name,
+                            file_path,
                             file_type,
                             file_size,
-                            relative_path,
                             assigned_by
                         ))
                         
@@ -1275,78 +1299,6 @@ def update_task(task_id):
             
             except Exception as e:
                 logger.error(f"Error handling attachments: {str(e)}")
-                raise
-
-        # Handle audio notes
-        if audio_notes:
-            try:
-                # First, get all current audio notes
-                cursor.execute("""
-                    SELECT audio_id, file_path
-                    FROM task_audio_notes 
-                    WHERE task_id = %s
-                """, (task_id,))
-                current_audio_notes = cursor.fetchall()
-                
-                # Delete existing audio files
-                for audio_note in current_audio_notes:
-                    file_path = os.path.join(
-                        os.path.dirname(os.path.abspath(__file__)),
-                        audio_note['file_path']
-                    )
-                    if os.path.exists(file_path):
-                        os.remove(file_path)
-                        logger.info(f"Deleted audio file: {file_path}")
-                
-                # Delete existing audio note records
-                cursor.execute("DELETE FROM task_audio_notes WHERE task_id = %s", (task_id,))
-                logger.info(f"Deleted existing audio notes for task: {task_id}")
-                
-                # Add new audio notes
-                for audio_note in audio_notes:
-                    try:
-                        audio_id = str(uuid.uuid4())
-                        audio_data = audio_note.get('audio_data', '')
-                        audio_duration = audio_note.get('duration', 0)
-                        original_filename = audio_note.get('filename', 'voice_note.wav')
-                        
-                        if not audio_data:
-                            logger.warning(f"Skipping empty audio note: {original_filename}")
-                            continue
-                        
-                        filename = secure_filename(f"{audio_id}_{original_filename}")
-                        file_path = os.path.join(AUDIO_FOLDER, filename)
-                        
-                        os.makedirs(AUDIO_FOLDER, exist_ok=True)
-                        
-                        try:
-                            audio_binary = base64.b64decode(audio_data)
-                            with open(file_path, 'wb') as f:
-                                f.write(audio_binary)
-                            logger.info(f"Saved new audio note: {file_path}")
-                        except Exception as e:
-                            logger.error(f"Error saving audio file {filename}: {str(e)}")
-                            continue
-                        
-                        relative_path = os.path.join('uploads', 'audio', filename)
-                        cursor.execute("""
-                            INSERT INTO task_audio_notes (
-                                audio_id, task_id, file_path, duration, 
-                                file_name, created_by
-                            )
-                            VALUES (%s, %s, %s, %s, %s, %s)
-                        """, (
-                            audio_id, task_id, relative_path, audio_duration,
-                            original_filename, assigned_by
-                        ))
-                        
-                        logger.info(f"Added new audio note record: {audio_id}")
-                    except Exception as e:
-                        logger.error(f"Error processing new audio note: {str(e)}")
-                        continue
-            
-            except Exception as e:
-                logger.error(f"Error handling audio notes: {str(e)}")
                 raise
 
         # Commit all changes
@@ -1890,6 +1842,83 @@ def update_fcm_token():
             cursor.close()
         if conn:
             conn.close()
+
+# ---------------- UPLOAD FILE ----------------
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    try:
+        if 'files[]' not in request.files:
+            return jsonify({
+                'success': False,
+                'message': 'No files provided'
+            }), 400
+        
+        files = request.files.getlist('files[]')
+        file_type = request.form.get('type', 'attachment')
+        uploaded_files = []
+        
+        # Define allowed extensions
+        allowed_extensions = ALLOWED_AUDIO_EXTENSIONS if file_type == 'audio' else {'pdf', 'doc', 'docx', 'xls', 'xlsx', 'txt', 'jpg', 'jpeg', 'png'}
+        
+        for file in files:
+            if file.filename == '':
+                continue
+                
+            # Check file extension
+            extension = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else ''
+            if extension not in allowed_extensions:
+                return jsonify({
+                    'success': False,
+                    'message': f'File type .{extension} is not allowed'
+                }), 400
+                
+            # Generate unique ID for the file
+            file_id = str(uuid.uuid4())
+            
+            # Determine upload folder based on type
+            upload_folder = AUDIO_FOLDER if file_type == 'audio' else ATTACHMENTS_FOLDER
+            
+            # Ensure filename is secure and unique
+            filename = secure_filename(f"{file_id}_{file.filename}")
+            file_path = os.path.join(upload_folder, filename)
+            
+            # Create directory if it doesn't exist
+            os.makedirs(upload_folder, exist_ok=True)
+            
+            # Save file in chunks
+            chunk_size = 8192  # 8KB chunks
+            with open(file_path, 'wb') as f:
+                while True:
+                    chunk = file.read(chunk_size)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+            
+            # Get relative path for database
+            relative_path = os.path.join('uploads', 'audio' if file_type == 'audio' else 'attachments', filename)
+            
+            # Get file size
+            file_size = os.path.getsize(file_path)
+            
+            uploaded_files.append({
+                'file_id': file_id,
+                'file_path': relative_path,
+                'file_name': file.filename,
+                'file_type': extension,
+                'file_size': file_size
+            })
+        
+        return jsonify({
+            'success': True,
+            'files': uploaded_files
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error uploading files: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': f"Error uploading files: {str(e)}"
+        }), 500
 
 # ---------------- MAIN ----------------
 if __name__ == '__main__':
