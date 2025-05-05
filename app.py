@@ -1314,6 +1314,7 @@ def update_task(task_id):
             'description': description,
             'assigned_to': assigned_to,
             'assigned_by': assigned_by,
+            'updated_by': data.get('updated_by'),
             'priority': priority,
             'status': status,
             'deadline': deadline,
