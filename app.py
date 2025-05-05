@@ -302,6 +302,21 @@ def init_db():
             )
         """)
 
+        # Create task_alarms table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS task_alarms (
+                alarm_id VARCHAR(36) PRIMARY KEY,
+                task_id VARCHAR(36) NOT NULL,
+                start_date DATE,
+                start_time TIME,
+                frequency VARCHAR(50),
+                created_by VARCHAR(100),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE ON UPDATE CASCADE,
+                FOREIGN KEY (created_by) REFERENCES users(username) ON DELETE SET NULL ON UPDATE CASCADE
+            )
+        """)
+
         # Re-enable foreign key checks
         cursor.execute("SET FOREIGN_KEY_CHECKS=1")
 
