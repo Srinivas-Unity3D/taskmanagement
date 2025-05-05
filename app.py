@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_file, Response
+from flask import Flask, request, jsonify, send_file, Response, send_from_directory
 from flask_cors import CORS
 import mysql.connector
 import uuid
@@ -609,6 +609,8 @@ def create_task():
         audio_notes = data.get('audio_notes', [])  # Changed to handle multiple audio notes
         attachments = data.get('attachments', [])
         
+        logger.info(f"[DEBUG] Received audio_notes: {audio_notes}")
+        
         # Validate required fields
         if not all([title, description, assigned_to, assigned_by, deadline]):
             return jsonify({
@@ -654,6 +656,7 @@ def create_task():
         # Handle audio notes
         for audio_note in audio_notes:
             try:
+                logger.info(f"[DEBUG] Processing audio_note: {audio_note}")
                 audio_id = audio_note.get('file_id', str(uuid.uuid4()))
                 file_path = audio_note.get('file_path')
                 audio_duration = audio_note.get('duration', 0)
@@ -1919,6 +1922,11 @@ def upload_file():
             'success': False,
             'message': f"Error uploading files: {str(e)}"
         }), 500
+
+# Serve audio files from uploads/audio
+@app.route('/uploads/audio/<path:filename>')
+def serve_audio(filename):
+    return send_from_directory(os.path.join(app.root_path, 'uploads/audio'), filename)
 
 # ---------------- MAIN ----------------
 if __name__ == '__main__':
