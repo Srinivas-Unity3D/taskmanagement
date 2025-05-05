@@ -654,34 +654,61 @@ def create_task():
             ))
         
         # Handle audio notes
-        for audio_note in audio_notes:
+        if audio_notes is not None:
             try:
-                logger.info(f"[DEBUG] Processing audio_note: {audio_note}")
-                audio_id = audio_note.get('file_id', str(uuid.uuid4()))
-                file_path = audio_note.get('file_path')
-                audio_duration = audio_note.get('duration', 0)
-                file_name = audio_note.get('file_name', 'voice_note.wav')
-                
-                if not file_path:
-                    logger.warning(f"Skipping audio note without file path")
-                    continue
-                
+                # Get all current audio notes for this task
                 cursor.execute("""
-                    INSERT INTO task_audio_notes (
-                        audio_id, task_id, file_path, duration,
-                        file_name, created_by
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                """, (
-                    audio_id, task_id, file_path, audio_duration,
-                    file_name, assigned_by
-                ))
-                
-                logger.info(f"Added audio note: {audio_id}")
+                    SELECT audio_id, file_path
+                    FROM task_audio_notes 
+                    WHERE task_id = %s
+                """, (task_id,))
+                current_audio_notes = cursor.fetchall()
+                current_audio_ids = set(note['audio_id'] for note in current_audio_notes)
+                current_file_paths = {note['audio_id']: note['file_path'] for note in current_audio_notes}
+
+                # Get new audio_ids from the request
+                new_audio_ids = set()
+                for note in audio_notes:
+                    if note.get('file_id'):
+                        new_audio_ids.add(note['file_id'])
+
+                # Find audio notes to delete (present in DB but not in new list)
+                audio_ids_to_delete = current_audio_ids - new_audio_ids
+                for audio_id in audio_ids_to_delete:
+                    file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), current_file_paths[audio_id])
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                        logger.info(f"Deleted audio file: {file_path}")
+                    cursor.execute("DELETE FROM task_audio_notes WHERE audio_id = %s", (audio_id,))
+                    logger.info(f"Deleted audio note record: {audio_id}")
+
+                # Upsert (insert or update) audio notes from the new list
+                for note in audio_notes:
+                    audio_id = note.get('file_id', str(uuid.uuid4()))
+                    file_path = note.get('file_path')
+                    audio_duration = note.get('duration', 0)
+                    file_name = note.get('file_name', 'voice_note.wav')
+                    created_by = note.get('created_by', assigned_by)
+                    if not file_path:
+                        logger.warning(f"Skipping audio note without file path")
+                        continue
+                    # Upsert logic: if exists, update; else, insert
+                    cursor.execute("""
+                        INSERT INTO task_audio_notes (audio_id, task_id, file_path, duration, file_name, created_by)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        ON DUPLICATE KEY UPDATE
+                            file_path = VALUES(file_path),
+                            duration = VALUES(duration),
+                            file_name = VALUES(file_name),
+                            created_by = VALUES(created_by)
+                    """, (
+                        audio_id, task_id, file_path, audio_duration, file_name, created_by
+                    ))
+                    logger.info(f"Upserted audio note: {audio_id}")
             except Exception as e:
-                logger.error(f"Error adding audio note: {str(e)}")
-                continue
-        
+                logger.error(f"Error handling audio notes: {str(e)}")
+                raise
+
         # Handle attachments
         for attachment in attachments:
             try:
@@ -1172,58 +1199,57 @@ def update_task(task_id):
         ))
 
         # Handle audio notes
-        if audio_notes:
+        if audio_notes is not None:
             try:
-                # First, get all current audio notes
+                # Get all current audio notes for this task
                 cursor.execute("""
                     SELECT audio_id, file_path
                     FROM task_audio_notes 
                     WHERE task_id = %s
                 """, (task_id,))
                 current_audio_notes = cursor.fetchall()
-                
-                # Delete existing audio files
-                for audio_note in current_audio_notes:
-                    file_path = os.path.join(
-                        os.path.dirname(os.path.abspath(__file__)),
-                        audio_note['file_path']
-                    )
+                current_audio_ids = set(note['audio_id'] for note in current_audio_notes)
+                current_file_paths = {note['audio_id']: note['file_path'] for note in current_audio_notes}
+
+                # Get new audio_ids from the request
+                new_audio_ids = set()
+                for note in audio_notes:
+                    if note.get('file_id'):
+                        new_audio_ids.add(note['file_id'])
+
+                # Find audio notes to delete (present in DB but not in new list)
+                audio_ids_to_delete = current_audio_ids - new_audio_ids
+                for audio_id in audio_ids_to_delete:
+                    file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), current_file_paths[audio_id])
                     if os.path.exists(file_path):
                         os.remove(file_path)
                         logger.info(f"Deleted audio file: {file_path}")
-                
-                # Delete existing audio note records
-                cursor.execute("DELETE FROM task_audio_notes WHERE task_id = %s", (task_id,))
-                logger.info(f"Deleted existing audio notes for task: {task_id}")
-                
-                # Add new audio notes
-                for audio_note in audio_notes:
-                    try:
-                        audio_id = audio_note.get('file_id', str(uuid.uuid4()))
-                        file_path = audio_note.get('file_path')
-                        audio_duration = audio_note.get('duration', 0)
-                        file_name = audio_note.get('file_name', 'voice_note.wav')
-                        
-                        if not file_path:
-                            logger.warning(f"Skipping audio note without file path")
-                            continue
-                        
-                        cursor.execute("""
-                            INSERT INTO task_audio_notes (
-                                audio_id, task_id, file_path, duration, 
-                                file_name, created_by
-                            )
-                            VALUES (%s, %s, %s, %s, %s, %s)
-                        """, (
-                            audio_id, task_id, file_path, audio_duration,
-                            file_name, assigned_by
-                        ))
-                        
-                        logger.info(f"Added new audio note record: {audio_id}")
-                    except Exception as e:
-                        logger.error(f"Error processing new audio note: {str(e)}")
+                    cursor.execute("DELETE FROM task_audio_notes WHERE audio_id = %s", (audio_id,))
+                    logger.info(f"Deleted audio note record: {audio_id}")
+
+                # Upsert (insert or update) audio notes from the new list
+                for note in audio_notes:
+                    audio_id = note.get('file_id', str(uuid.uuid4()))
+                    file_path = note.get('file_path')
+                    audio_duration = note.get('duration', 0)
+                    file_name = note.get('file_name', 'voice_note.wav')
+                    created_by = note.get('created_by', assigned_by)
+                    if not file_path:
+                        logger.warning(f"Skipping audio note without file path")
                         continue
-            
+                    # Upsert logic: if exists, update; else, insert
+                    cursor.execute("""
+                        INSERT INTO task_audio_notes (audio_id, task_id, file_path, duration, file_name, created_by)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        ON DUPLICATE KEY UPDATE
+                            file_path = VALUES(file_path),
+                            duration = VALUES(duration),
+                            file_name = VALUES(file_name),
+                            created_by = VALUES(created_by)
+                    """, (
+                        audio_id, task_id, file_path, audio_duration, file_name, created_by
+                    ))
+                    logger.info(f"Upserted audio note: {audio_id}")
             except Exception as e:
                 logger.error(f"Error handling audio notes: {str(e)}")
                 raise
