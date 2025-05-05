@@ -978,51 +978,36 @@ def get_attachment(attachment_id):
         if conn:
             conn.close()
 
-# ---------------- GET AUDIO NOTE ----------------
+# ---------------- GET AUDIO NOTE (RESTful) ----------------
 @app.route('/tasks/<task_id>/audio', methods=['GET'])
-def get_audio_note(task_id):
-    conn = None
-    cursor = None
+def get_task_audio_notes(task_id):
     try:
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor(dictionary=True)
-
         cursor.execute("""
-            SELECT audio_id, file_path, duration, file_name
+            SELECT audio_id, file_path, duration, created_by, file_name, created_at
             FROM task_audio_notes
             WHERE task_id = %s
+            ORDER BY created_at DESC
         """, (task_id,))
-
-        audio = cursor.fetchone()
-        if audio:
-            # Get the full file path
-            file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), audio['file_path'])
-            
-            if not os.path.exists(file_path):
-                return jsonify({
-                    'success': False,
-                    'message': 'Audio file not found on server'
-                }), 404
-            
-            # Stream the file instead of forcing download
-            return send_file(
-                file_path,
-                mimetype='audio/wav',
-                as_attachment=False,  # Changed to False to enable streaming
-                conditional=True      # Enable conditional requests
-            )
-        else:
-            return jsonify({
-                'success': False,
-                'message': 'Audio note not found'
-            }), 404
-
+        notes = cursor.fetchall()
+        if not notes:
+            return jsonify({'message': 'No audio notes found for this task'}), 404
+        formatted_notes = []
+        for note in notes:
+            formatted_note = {
+                'audio_id': note['audio_id'],
+                'file_path': note['file_path'],
+                'duration': note['duration'],
+                'created_by': note['created_by'],
+                'file_name': note['file_name'],
+                'created_at': note['created_at'].isoformat() if note['created_at'] else None
+            }
+            formatted_notes.append(formatted_note)
+        return jsonify(formatted_notes), 200
     except Exception as e:
-        logger.error(f"Error fetching audio note: {str(e)}")
-        return jsonify({
-            'success': False,
-            'message': f"Error fetching audio note: {str(e)}"
-        }), 500
+        logger.error(f"Error fetching audio notes: {str(e)}")
+        return jsonify({'error': str(e)}), 500
     finally:
         if cursor:
             cursor.close()
