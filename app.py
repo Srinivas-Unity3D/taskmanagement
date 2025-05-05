@@ -1927,7 +1927,44 @@ def upload_file():
 # Serve audio files from uploads/audio
 @app.route('/uploads/audio/<path:filename>')
 def serve_audio(filename):
-    return send_from_directory(os.path.join(app.root_path, 'uploads/audio'), filename)
+    try:
+        # Get the absolute path to the audio file
+        audio_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads', 'audio', filename)
+        
+        # Check if file exists
+        if not os.path.exists(audio_path):
+            logger.error(f"Audio file not found: {audio_path}")
+            return jsonify({
+                'success': False,
+                'message': 'Audio file not found'
+            }), 404
+            
+        # Determine the correct mimetype based on file extension
+        extension = filename.rsplit('.', 1)[1].lower() if '.' in filename else ''
+        if extension == 'wav':
+            mimetype = 'audio/wav'
+        elif extension == 'mp3':
+            mimetype = 'audio/mpeg'
+        elif extension == 'm4a':
+            mimetype = 'audio/mp4'
+        elif extension == 'ogg':
+            mimetype = 'audio/ogg'
+        else:
+            mimetype = 'application/octet-stream'
+            
+        # Send the file with proper mimetype
+        return send_file(
+            audio_path,
+            mimetype=mimetype,
+            as_attachment=False,
+            download_name=filename
+        )
+    except Exception as e:
+        logger.error(f"Error serving audio file: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': f"Error serving audio file: {str(e)}"
+        }), 500
 
 # ---------------- MAIN ----------------
 if __name__ == '__main__':
