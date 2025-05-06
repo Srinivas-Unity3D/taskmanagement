@@ -48,19 +48,93 @@ app.config['DEBUG'] = True  # Enable debug for development
 app.config['ENV'] = 'development'  # Set to development environment
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key')
 
-socketio = SocketIO(app, 
-    cors_allowed_origins="*", 
-    ping_timeout=20, 
-    ping_interval=10,
-    async_mode='threading', 
-    logger=True, 
+# Updated SocketIO configuration
+socketio = SocketIO(
+    app,
+    cors_allowed_origins="*",
+    async_mode='eventlet',
+    ping_timeout=60,
+    ping_interval=25,
+    logger=True,
     engineio_logger=True,
     always_connect=True,
     reconnection=True,
-    reconnection_attempts=5,
+    reconnection_attempts=10,
     reconnection_delay=1000,
-    reconnection_delay_max=5000
+    reconnection_delay_max=5000,
+    max_http_buffer_size=1e8,
+    websocket_class=None,  # Let it use the default
+    path='socket.io',  # Explicitly set the path
+    transports=['websocket', 'polling']  # Allow both transports
 )
+
+# Add middleware to validate requests
+@app.before_request
+def validate_request():
+    if request.path.startswith('/socket.io/'):
+        # Validate WebSocket upgrade request
+        if request.headers.get('Upgrade', '').lower() == 'websocket':
+            if not request.headers.get('Connection', '').lower() == 'upgrade':
+                return 'Invalid WebSocket request', 400
+        # Validate content type for non-WebSocket requests
+        elif request.method in ['POST', 'PUT']:
+            if not request.is_json and request.headers.get('Content-Type') != 'application/json':
+                return 'Content-Type must be application/json', 400
+
+# Enhanced error handlers for SocketIO
+@socketio.on_error()
+def error_handler(e):
+    logger.error(f"SocketIO error: {str(e)}")
+    return {'error': str(e)}
+
+@socketio.on_error_default
+def default_error_handler(e):
+    logger.error(f"SocketIO default error: {str(e)}")
+    return {'error': str(e)}
+
+@socketio.on('connect')
+def handle_connect():
+    try:
+        logger.info(f"Client connected: {request.sid}")
+        # Validate the connection
+        if not request.sid:
+            logger.error("Invalid connection attempt - no SID")
+            return False
+            
+        # Send connection response
+        socketio.emit('connect_response', {
+            'status': 'connected',
+            'sid': request.sid,
+            'timestamp': datetime.now().isoformat()
+        }, room=request.sid)
+        return True
+    except Exception as e:
+        logger.error(f"Error in handle_connect: {str(e)}")
+        return False
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    try:
+        sid = request.sid
+        if not sid:
+            logger.error("Invalid disconnect - no SID")
+            return
+            
+        # Find and remove the disconnected user
+        username_to_remove = None
+        for username, connected_sid in connected_users.items():
+            if connected_sid == sid:
+                username_to_remove = username
+                break
+        
+        if username_to_remove:
+            logger.info(f"User {username_to_remove} disconnected")
+            del connected_users[username_to_remove]
+        
+        logger.info(f"Client disconnected: {sid}")
+        logger.info(f"Current connected users: {connected_users}")
+    except Exception as e:
+        logger.error(f"Error in handle_disconnect: {str(e)}")
 
 # Setup logging
 logging.basicConfig(
@@ -100,11 +174,6 @@ def convert_to_timezone(dt, from_tz='UTC', to_tz=DEFAULT_TIMEZONE):
         dt = from_tz.localize(dt)
     return dt.astimezone(to_tz)
 
-@socketio.on('connect')
-def handle_connect():
-    logger.info(f"Client connected: {request.sid}")
-    socketio.emit('connect_response', {'status': 'connected', 'sid': request.sid}, room=request.sid)
-
 @socketio.on('register')
 def handle_register(data):
     try:
@@ -124,26 +193,6 @@ def handle_register(data):
         }, room=request.sid)
     except Exception as e:
         logger.error(f"Error in handle_register: {str(e)}")
-
-@socketio.on('disconnect')
-def handle_disconnect():
-    try:
-        sid = request.sid
-        # Find and remove the disconnected user
-        username_to_remove = None
-        for username, connected_sid in connected_users.items():
-            if connected_sid == sid:
-                username_to_remove = username
-                break
-        
-        if username_to_remove:
-            logger.info(f"User {username_to_remove} disconnected")
-            del connected_users[username_to_remove]
-        
-        logger.info(f"Client disconnected: {sid}")
-        logger.info(f"Current connected users: {connected_users}")
-    except Exception as e:
-        logger.error(f"Error in handle_disconnect: {str(e)}")
 
 def get_db_connection():
     """Get a new database connection"""
@@ -2389,10 +2438,26 @@ def alarm_service():
 alarm_thread = threading.Thread(target=alarm_service, daemon=True)
 alarm_thread.start()
 
+# Add a health check endpoint
+@app.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({
+        'status': 'healthy',
+        'timestamp': datetime.now().isoformat(),
+        'connected_clients': len(connected_users)
+    })
+
 # ---------------- MAIN ----------------
 if __name__ == '__main__':
     # Initialize the application
     initialize_application()
+    
+    # Run the server with eventlet
+    import eventlet
+    eventlet.monkey_patch()
+    
+    # Configure eventlet
+    eventlet.hubs.use_hub('poll')
     
     # Run the server
     socketio.run(
@@ -2400,5 +2465,6 @@ if __name__ == '__main__':
         host='0.0.0.0', 
         port=5000, 
         debug=True, 
-        use_reloader=False
+        use_reloader=False,
+        log_output=True
     ) 
