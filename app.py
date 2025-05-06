@@ -52,7 +52,7 @@ app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key')
 socketio = SocketIO(
     app,
     cors_allowed_origins="*",
-    async_mode='eventlet',
+    async_mode='threading',  # Changed back to threading mode
     ping_timeout=60,
     ping_interval=25,
     logger=True,
@@ -63,9 +63,8 @@ socketio = SocketIO(
     reconnection_delay=1000,
     reconnection_delay_max=5000,
     max_http_buffer_size=1e8,
-    websocket_class=None,  # Let it use the default
-    path='socket.io',  # Explicitly set the path
-    transports=['websocket', 'polling']  # Allow both transports
+    path='socket.io',
+    transports=['websocket', 'polling']
 )
 
 # Add middleware to validate requests
@@ -2451,13 +2450,6 @@ def health_check():
 if __name__ == '__main__':
     # Initialize the application
     initialize_application()
-    
-    # Run the server with eventlet
-    import eventlet
-    eventlet.monkey_patch()
-    
-    # Configure eventlet
-    eventlet.hubs.use_hub('poll')
     
     # Run the server
     socketio.run(
