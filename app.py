@@ -3,7 +3,7 @@ from flask_cors import CORS
 import mysql.connector
 import uuid
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask_socketio import SocketIO, emit
 import json
 import os
@@ -12,6 +12,10 @@ import base64
 import io
 from werkzeug.utils import secure_filename
 import shutil
+from firebase_admin import messaging
+import time
+import threading
+import pytz  # Add this import at the top
 
 # Load environment variables
 load_dotenv()
@@ -79,6 +83,22 @@ db_config = {
 
 # Store connected users
 connected_users = {}
+
+# Add timezone configuration
+DEFAULT_TIMEZONE = 'Asia/Kolkata'  # Change this to your default timezone
+
+def get_current_time():
+    """Get current time in the configured timezone"""
+    tz = pytz.timezone(DEFAULT_TIMEZONE)
+    return datetime.now(tz)
+
+def convert_to_timezone(dt, from_tz='UTC', to_tz=DEFAULT_TIMEZONE):
+    """Convert datetime from one timezone to another"""
+    from_tz = pytz.timezone(from_tz)
+    to_tz = pytz.timezone(to_tz)
+    if not dt.tzinfo:
+        dt = from_tz.localize(dt)
+    return dt.astimezone(to_tz)
 
 @socketio.on('connect')
 def handle_connect():
@@ -223,7 +243,8 @@ def init_db():
                 password VARCHAR(255) NOT NULL,
                 role VARCHAR(50) NOT NULL,
                 fcm_token VARCHAR(255),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                timezone VARCHAR(50)
             )
         """)
 
@@ -310,6 +331,9 @@ def init_db():
                 start_date DATE,
                 start_time TIME,
                 frequency VARCHAR(50),
+                next_alarm_time TIME,
+                acknowledged BOOLEAN DEFAULT FALSE,
+                acknowledged_at TIMESTAMP NULL,
                 created_by VARCHAR(100),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE ON UPDATE CASCADE,
@@ -510,11 +534,11 @@ def signup():
 
         user_id = str(uuid.uuid4())
         cursor.execute("""
-            INSERT INTO users (user_id, username, email, phone, password, role, fcm_token)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO users (user_id, username, email, phone, password, role, fcm_token, timezone)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             user_id, data['username'], data['email'], data['phone'],
-            data['password'], data['role'], data.get('fcm_token', '')
+            data['password'], data['role'], data.get('fcm_token', ''), data.get('timezone', DEFAULT_TIMEZONE)
         ))
         conn.commit()
         return jsonify({'message': 'Signup successful'}), 200
@@ -606,7 +630,7 @@ def create_task():
         priority = data.get('priority', 'low')
         status = data.get('status', 'pending')
         alarm_settings = data.get('alarm_settings')
-        audio_notes = data.get('audio_notes', [])  # Changed to handle multiple audio notes
+        audio_notes = data.get('audio_notes', [])
         attachments = data.get('attachments', [])
         
         logger.info(f"[DEBUG] Received audio_notes: {audio_notes}")
@@ -654,61 +678,35 @@ def create_task():
             ))
         
         # Handle audio notes
-        if audio_notes is not None:
+        if audio_notes:
             try:
-                # Get all current audio notes for this task
-                cursor.execute("""
-                    SELECT audio_id, file_path
-                    FROM task_audio_notes 
-                    WHERE task_id = %s
-                """, (task_id,))
-                current_audio_notes = cursor.fetchall()
-                current_audio_ids = set(note['audio_id'] for note in current_audio_notes)
-                current_file_paths = {note['audio_id']: note['file_path'] for note in current_audio_notes}
-
-                # Get new audio_ids from the request
-                new_audio_ids = set()
-                for note in audio_notes:
-                    if note.get('file_id'):
-                        new_audio_ids.add(note['file_id'])
-
-                # Find audio notes to delete (present in DB but not in new list)
-                audio_ids_to_delete = current_audio_ids - new_audio_ids
-                for audio_id in audio_ids_to_delete:
-                    file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), current_file_paths[audio_id])
-                    if os.path.exists(file_path):
-                        os.remove(file_path)
-                        logger.info(f"Deleted audio file: {file_path}")
-                    cursor.execute("DELETE FROM task_audio_notes WHERE audio_id = %s", (audio_id,))
-                    logger.info(f"Deleted audio note record: {audio_id}")
-
-                # Upsert (insert or update) audio notes from the new list
                 for note in audio_notes:
                     audio_id = note.get('file_id', str(uuid.uuid4()))
                     file_path = note.get('file_path')
                     audio_duration = note.get('duration', 0)
                     file_name = note.get('file_name', 'voice_note.wav')
                     created_by = note.get('created_by', assigned_by)
+                    
                     if not file_path:
                         logger.warning(f"Skipping audio note without file path")
                         continue
-                    # Upsert logic: if exists, update; else, insert
+                    
+                    # Insert audio note
                     cursor.execute("""
-                        INSERT INTO task_audio_notes (audio_id, task_id, file_path, duration, file_name, created_by)
+                        INSERT INTO task_audio_notes (
+                            audio_id, task_id, file_path, duration, 
+                            file_name, created_by
+                        )
                         VALUES (%s, %s, %s, %s, %s, %s)
-                        ON DUPLICATE KEY UPDATE
-                            file_path = VALUES(file_path),
-                            duration = VALUES(duration),
-                            file_name = VALUES(file_name),
-                            created_by = VALUES(created_by)
                     """, (
-                        audio_id, task_id, file_path, audio_duration, file_name, created_by
+                        audio_id, task_id, file_path, audio_duration,
+                        file_name, created_by
                     ))
-                    logger.info(f"Upserted audio note: {audio_id}")
+                    logger.info(f"Added audio note: {audio_id}")
             except Exception as e:
                 logger.error(f"Error handling audio notes: {str(e)}")
                 raise
-
+        
         # Handle attachments
         for attachment in attachments:
             try:
@@ -1152,19 +1150,6 @@ def update_task(task_id):
         existing_attachment_ids = data.get('existing_attachment_ids', [])
         alarm_settings = data.get('alarm_settings')
 
-        # Validate status
-        valid_statuses = ['pending', 'in_progress', 'completed', 'snoozed']
-        if status.lower().replace('_', '') not in [s.replace('_', '') for s in valid_statuses]:
-            return jsonify({
-                'success': False,
-                'message': 'Invalid status value',
-                'valid_statuses': valid_statuses,
-                'task_id': task_id
-            }), 400
-
-        # Normalize status to use underscore
-        normalized_status = 'in_progress' if status.lower().replace('_', '') == 'inprogress' else status.lower()
-
         # Initialize database connection
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
@@ -1181,6 +1166,85 @@ def update_task(task_id):
                 'message': 'Task not found',
                 'task_id': task_id
             }), 404
+
+        # Handle alarm settings if provided
+        if alarm_settings:
+            start_date = alarm_settings.get('start_date')
+            start_time = alarm_settings.get('start_time')
+            frequency = alarm_settings.get('frequency')
+            
+            if all([start_date, start_time, frequency]):
+                # Get user's timezone
+                cursor.execute("""
+                    SELECT timezone FROM users WHERE username = %s
+                """, (assigned_to,))
+                user = cursor.fetchone()
+                user_timezone = user.get('timezone', DEFAULT_TIMEZONE) if user else DEFAULT_TIMEZONE
+                
+                # Convert start time to user's timezone
+                try:
+                    start_datetime = datetime.strptime(f"{start_date} {start_time}", '%Y-%m-%d %H:%M:%S')
+                    start_datetime = convert_to_timezone(start_datetime, to_tz=user_timezone)
+                    start_time = start_datetime.strftime('%H:%M:%S')
+                except Exception as e:
+                    logger.error(f"Error converting timezone: {str(e)}")
+                
+                # Calculate next alarm time
+                next_alarm_time = calculate_next_alarm_time(start_time, frequency)
+                if next_alarm_time:
+                    # Update or insert alarm settings
+                    cursor.execute("""
+                        INSERT INTO task_alarms (
+                            alarm_id, task_id, start_date, start_time,
+                            frequency, next_alarm_time, created_by
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON DUPLICATE KEY UPDATE
+                            start_date = VALUES(start_date),
+                            start_time = VALUES(start_time),
+                            frequency = VALUES(frequency),
+                            next_alarm_time = VALUES(next_alarm_time)
+                    """, (
+                        str(uuid.uuid4()),
+                        task_id,
+                        start_date,
+                        start_time,
+                        frequency,
+                        next_alarm_time,
+                        assigned_by
+                    ))
+                    
+                    # Send FCM notification for the updated alarm
+                    cursor.execute("""
+                        SELECT fcm_token, timezone FROM users WHERE username = %s
+                    """, (assigned_to,))
+                    user = cursor.fetchone()
+                    
+                    if user and user['fcm_token']:
+                        # Convert alarm time to user's timezone for display
+                        alarm_time = datetime.strptime(start_time, '%H:%M:%S')
+                        alarm_time = convert_to_timezone(alarm_time, to_tz=user.get('timezone', DEFAULT_TIMEZONE))
+                        
+                        message = messaging.Message(
+                            notification=messaging.Notification(
+                                title=f"Task Alarm Updated: {title}",
+                                body=f"Alarm set for {alarm_time.strftime('%H:%M:%S')} with {frequency} frequency"
+                            ),
+                            data={
+                                'type': 'alarm',
+                                'task_id': task_id,
+                                'alarm_time': alarm_time.strftime('%H:%M:%S'),
+                                'frequency': frequency,
+                                'timezone': user.get('timezone', DEFAULT_TIMEZONE)
+                            },
+                            token=user['fcm_token']
+                        )
+                        
+                        try:
+                            messaging.send(message)
+                            logger.info(f"Alarm updated for task {task_id}")
+                        except Exception as e:
+                            logger.error(f"Error sending FCM notification: {str(e)}")
 
         # Update task basic info
         cursor.execute("""
@@ -1199,57 +1263,31 @@ def update_task(task_id):
         ))
 
         # Handle audio notes
-        if audio_notes is not None:
+        if audio_notes:
             try:
-                # Get all current audio notes for this task
-                cursor.execute("""
-                    SELECT audio_id, file_path
-                    FROM task_audio_notes 
-                    WHERE task_id = %s
-                """, (task_id,))
-                current_audio_notes = cursor.fetchall()
-                current_audio_ids = set(note['audio_id'] for note in current_audio_notes)
-                current_file_paths = {note['audio_id']: note['file_path'] for note in current_audio_notes}
-
-                # Get new audio_ids from the request
-                new_audio_ids = set()
-                for note in audio_notes:
-                    if note.get('file_id'):
-                        new_audio_ids.add(note['file_id'])
-
-                # Find audio notes to delete (present in DB but not in new list)
-                audio_ids_to_delete = current_audio_ids - new_audio_ids
-                for audio_id in audio_ids_to_delete:
-                    file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), current_file_paths[audio_id])
-                    if os.path.exists(file_path):
-                        os.remove(file_path)
-                        logger.info(f"Deleted audio file: {file_path}")
-                    cursor.execute("DELETE FROM task_audio_notes WHERE audio_id = %s", (audio_id,))
-                    logger.info(f"Deleted audio note record: {audio_id}")
-
-                # Upsert (insert or update) audio notes from the new list
                 for note in audio_notes:
                     audio_id = note.get('file_id', str(uuid.uuid4()))
                     file_path = note.get('file_path')
                     audio_duration = note.get('duration', 0)
                     file_name = note.get('file_name', 'voice_note.wav')
                     created_by = note.get('created_by', assigned_by)
+                    
                     if not file_path:
                         logger.warning(f"Skipping audio note without file path")
                         continue
-                    # Upsert logic: if exists, update; else, insert
+                    
+                    # Insert audio note
                     cursor.execute("""
-                        INSERT INTO task_audio_notes (audio_id, task_id, file_path, duration, file_name, created_by)
+                        INSERT INTO task_audio_notes (
+                            audio_id, task_id, file_path, duration, 
+                            file_name, created_by
+                        )
                         VALUES (%s, %s, %s, %s, %s, %s)
-                        ON DUPLICATE KEY UPDATE
-                            file_path = VALUES(file_path),
-                            duration = VALUES(duration),
-                            file_name = VALUES(file_name),
-                            created_by = VALUES(created_by)
                     """, (
-                        audio_id, task_id, file_path, audio_duration, file_name, created_by
+                        audio_id, task_id, file_path, audio_duration,
+                        file_name, created_by
                     ))
-                    logger.info(f"Upserted audio note: {audio_id}")
+                    logger.info(f"Added audio note: {audio_id}")
             except Exception as e:
                 logger.error(f"Error handling audio notes: {str(e)}")
                 raise
@@ -1779,22 +1817,17 @@ def get_fcm_token():
         cursor = conn.cursor(dictionary=True)
 
         # Look up the userid for the given username
-        cursor.execute("SELECT user_id FROM users WHERE username = %s", (username,))
+        cursor.execute("SELECT user_id, fcm_token FROM users WHERE username = %s", (username,))
         user = cursor.fetchone()
         if not user:
             return jsonify({'message': f'User {username} not found'}), 404
 
-        userid = user['user_id']
+        # Return both user_id and fcm_token (fcm_token might be null)
+        return jsonify({
+            'user_id': user['user_id'],
+            'fcm_token': user['fcm_token']
+        }), 200
 
-        # Fetch the most recent FCM token for the userid
-        cursor.execute("SELECT fcm_token FROM users WHERE user_id = %s ORDER BY created_at DESC LIMIT 1", (userid,))
-        token_record = cursor.fetchone()
-
-        # Check if a token was found
-        if token_record and token_record['fcm_token']:
-            return jsonify({'fcm_token': token_record['fcm_token']}), 200
-        else:
-            return jsonify({'message': 'No FCM token found for this user'}), 404
     except Exception as e:
         logger.error(f"Error fetching FCM token: {str(e)}")
         return jsonify({'error': str(e)}), 500
@@ -1980,6 +2013,381 @@ def serve_audio(filename):
             'success': False,
             'message': f"Error serving audio file: {str(e)}"
         }), 500
+
+# ---------------- MARK ALL NOTIFICATIONS AS READ ----------------
+@app.route('/notifications/accept_all', methods=['POST'])
+def accept_all_notifications():
+    conn = None
+    cursor = None
+    try:
+        data = request.get_json()
+        username = data.get('username')
+        if not username:
+            return jsonify({'success': False, 'message': 'Username required'}), 400
+
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE task_notifications SET is_read = 1 WHERE target_user = %s
+        """, (username,))
+        conn.commit()
+        return jsonify({'success': True, 'message': 'All notifications marked as read'})
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+def calculate_next_alarm_time(start_time, frequency):
+    """Calculate the next alarm time based on start time and frequency"""
+    try:
+        # Parse start time
+        start_datetime = datetime.strptime(start_time, '%H:%M:%S')
+        
+        # Get current time
+        now = datetime.now()
+        current_time = now.time()
+        
+        # Calculate next alarm time
+        if frequency == '30min':
+            interval = timedelta(minutes=30)
+        elif frequency == '1hour':
+            interval = timedelta(hours=1)
+        elif frequency == '2hours':
+            interval = timedelta(hours=2)
+        elif frequency == '4hours':
+            interval = timedelta(hours=4)
+        else:
+            return None
+            
+        # Find next alarm time
+        next_alarm = start_datetime
+        while next_alarm.time() <= current_time:
+            next_alarm += interval
+            
+        return next_alarm.strftime('%H:%M:%S')
+    except Exception as e:
+        logger.error(f"Error calculating next alarm time: {str(e)}")
+        return None
+
+@app.route('/tasks/<task_id>/schedule_alarm', methods=['POST'])
+def schedule_alarm(task_id):
+    conn = None
+    cursor = None
+    try:
+        data = request.get_json()
+        start_date = data.get('start_date')
+        start_time = data.get('start_time')
+        frequency = data.get('frequency')
+        
+        if not all([start_date, start_time, frequency]):
+            return jsonify({
+                'success': False,
+                'message': 'Missing required fields: start_date, start_time, frequency'
+            }), 400
+            
+        # Validate frequency
+        valid_frequencies = ['30min', '1hour', '2hours', '4hours']
+        if frequency not in valid_frequencies:
+            return jsonify({
+                'success': False,
+                'message': f'Invalid frequency. Must be one of: {", ".join(valid_frequencies)}'
+            }), 400
+            
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor(dictionary=True)
+        
+        # Get task details
+        cursor.execute("""
+            SELECT t.task_id, t.title, t.assigned_to, u.fcm_token, u.timezone
+            FROM tasks t
+            JOIN users u ON t.assigned_to = u.username
+            WHERE t.task_id = %s
+        """, (task_id,))
+        
+        task = cursor.fetchone()
+        if not task:
+            return jsonify({
+                'success': False,
+                'message': 'Task not found'
+            }), 404
+            
+        if not task['fcm_token']:
+            return jsonify({
+                'success': False,
+                'message': 'Assignee does not have FCM token registered'
+            }), 400
+            
+        # Calculate next alarm time
+        next_alarm_time = calculate_next_alarm_time(start_time, frequency)
+        if not next_alarm_time:
+            return jsonify({
+                'success': False,
+                'message': 'Error calculating next alarm time'
+            }), 500
+            
+        # Convert start time to user's timezone
+        user_timezone = task.get('timezone', DEFAULT_TIMEZONE)
+        try:
+            start_datetime = datetime.strptime(f"{start_date} {start_time}", '%Y-%m-%d %H:%M:%S')
+            start_datetime = convert_to_timezone(start_datetime, to_tz=user_timezone)
+            start_time = start_datetime.strftime('%H:%M:%S')
+        except Exception as e:
+            logger.error(f"Error converting timezone: {str(e)}")
+            
+        # Update or insert alarm settings
+        cursor.execute("""
+            INSERT INTO task_alarms (
+                alarm_id, task_id, start_date, start_time,
+                frequency, next_alarm_time, created_by,
+                acknowledged, acknowledged_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                start_date = VALUES(start_date),
+                start_time = VALUES(start_time),
+                frequency = VALUES(frequency),
+                next_alarm_time = VALUES(next_alarm_time),
+                acknowledged = VALUES(acknowledged),
+                acknowledged_at = VALUES(acknowledged_at)
+        """, (
+            str(uuid.uuid4()),
+            task_id,
+            start_date,
+            start_time,
+            frequency,
+            next_alarm_time,
+            task['assigned_to'],
+            False,
+            None
+        ))
+        
+        conn.commit()
+        
+        # Send FCM notification for the first alarm
+        message = messaging.Message(
+            notification=messaging.Notification(
+                title=f"Task Reminder: {task['title']}",
+                body=f"Alarm set for {start_time} with {frequency} frequency"
+            ),
+            data={
+                'type': 'alarm',
+                'task_id': task_id,
+                'alarm_time': start_time,
+                'frequency': frequency
+            },
+            android=messaging.AndroidConfig(
+                priority='high',
+                notification=messaging.AndroidNotification(
+                    priority='max',
+                    sound='default',
+                    channel_id='task_alarms',
+                    importance='high',
+                    visibility='public',
+                    default_sound=True,
+                    default_vibrate_timings=True,
+                    default_light_settings=True
+                )
+            ),
+            apns=messaging.APNSConfig(
+                payload=messaging.APNSPayload(
+                    aps=messaging.Aps(
+                        sound='default',
+                        badge=1,
+                        content_available=True
+                    )
+                )
+            ),
+            token=task['fcm_token']
+        )
+        
+        try:
+            messaging.send(message)
+            logger.info(f"Alarm scheduled for task {task_id} with FCM token {task['fcm_token']}")
+        except Exception as e:
+            logger.error(f"Error sending FCM notification: {str(e)}")
+            # Don't fail the request if FCM fails
+            
+        return jsonify({
+            'success': True,
+            'message': 'Alarm scheduled successfully',
+            'next_alarm_time': next_alarm_time
+        })
+        
+    except Exception as e:
+        logger.error(f"Error scheduling alarm: {str(e)}")
+        if conn:
+            conn.rollback()
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+@app.route('/tasks/<task_id>/acknowledge_alarm', methods=['POST'])
+def acknowledge_alarm(task_id):
+    conn = None
+    cursor = None
+    try:
+        data = request.get_json()
+        alarm_id = data.get('alarm_id')
+        
+        if not alarm_id:
+            return jsonify({
+                'success': False,
+                'message': 'Alarm ID is required'
+            }), 400
+            
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor()
+        
+        # Mark alarm as acknowledged
+        cursor.execute("""
+            UPDATE task_alarms 
+            SET acknowledged = TRUE,
+                acknowledged_at = NOW()
+            WHERE alarm_id = %s AND task_id = %s
+        """, (alarm_id, task_id))
+        
+        if cursor.rowcount == 0:
+            return jsonify({
+                'success': False,
+                'message': 'Alarm not found'
+            }), 404
+            
+        conn.commit()
+        return jsonify({
+            'success': True,
+            'message': 'Alarm acknowledged successfully'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error acknowledging alarm: {str(e)}")
+        if conn:
+            conn.rollback()
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+def alarm_service():
+    """Background service to check and trigger alarms"""
+    while True:
+        try:
+            conn = mysql.connector.connect(**db_config)
+            cursor = conn.cursor(dictionary=True)
+            
+            # Get current time
+            now = datetime.now()
+            current_time = now.strftime('%H:%M:%S')
+            
+            # Find alarms that need to be triggered
+            cursor.execute("""
+                SELECT ta.*, t.title, u.fcm_token, u.timezone
+                FROM task_alarms ta
+                JOIN tasks t ON ta.task_id = t.task_id
+                JOIN users u ON t.assigned_to = u.username
+                WHERE ta.next_alarm_time <= %s
+                AND u.fcm_token IS NOT NULL
+                AND (ta.acknowledged = FALSE OR ta.acknowledged IS NULL)
+            """, (current_time,))
+            
+            alarms = cursor.fetchall()
+            
+            for alarm in alarms:
+                try:
+                    # Convert alarm time to user's timezone
+                    user_timezone = alarm.get('timezone', DEFAULT_TIMEZONE)
+                    alarm_time = datetime.strptime(alarm['next_alarm_time'].strftime('%H:%M:%S'), '%H:%M:%S')
+                    alarm_time = convert_to_timezone(alarm_time, to_tz=user_timezone)
+                    
+                    # Send FCM notification with high priority
+                    message = messaging.Message(
+                        notification=messaging.Notification(
+                            title=f"Task Reminder: {alarm['title']}",
+                            body=f"Time to check your task!"
+                        ),
+                        data={
+                            'type': 'alarm',
+                            'task_id': alarm['task_id'],
+                            'alarm_id': alarm['alarm_id'],
+                            'alarm_time': alarm_time.strftime('%H:%M:%S'),
+                            'frequency': alarm['frequency']
+                        },
+                        android=messaging.AndroidConfig(
+                            priority='high',
+                            notification=messaging.AndroidNotification(
+                                priority='max',
+                                sound='default',
+                                channel_id='task_alarms',
+                                importance='high',
+                                visibility='public',
+                                default_sound=True,
+                                default_vibrate_timings=True,
+                                default_light_settings=True
+                            )
+                        ),
+                        apns=messaging.APNSConfig(
+                            payload=messaging.APNSPayload(
+                                aps=messaging.Aps(
+                                    sound='default',
+                                    badge=1,
+                                    content_available=True
+                                )
+                            )
+                        ),
+                        token=alarm['fcm_token']
+                    )
+                    
+                    messaging.send(message)
+                    logger.info(f"Alarm triggered for task {alarm['task_id']}")
+                    
+                    # Calculate and update next alarm time
+                    next_alarm_time = calculate_next_alarm_time(
+                        alarm['next_alarm_time'].strftime('%H:%M:%S'),
+                        alarm['frequency']
+                    )
+                    
+                    if next_alarm_time:
+                        cursor.execute("""
+                            UPDATE task_alarms
+                            SET next_alarm_time = %s,
+                                acknowledged = FALSE
+                            WHERE alarm_id = %s
+                        """, (next_alarm_time, alarm['alarm_id']))
+                        conn.commit()
+                        
+                except Exception as e:
+                    logger.error(f"Error processing alarm {alarm['alarm_id']}: {str(e)}")
+                    continue
+                    
+        except Exception as e:
+            logger.error(f"Error in alarm service: {str(e)}")
+        finally:
+            if 'cursor' in locals():
+                cursor.close()
+            if 'conn' in locals():
+                conn.close()
+            
+        # Sleep for 1 minute before next check
+        time.sleep(60)
+
+# Start alarm service in a separate thread
+alarm_thread = threading.Thread(target=alarm_service, daemon=True)
+alarm_thread.start()
 
 # ---------------- MAIN ----------------
 if __name__ == '__main__':
