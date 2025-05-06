@@ -1167,6 +1167,22 @@ def update_task(task_id):
                 'task_id': task_id
             }), 404
 
+        # Update task basic info
+        cursor.execute("""
+            UPDATE tasks 
+            SET title = %s, description = %s, assigned_to = %s, assigned_by = %s,
+                priority = %s, status = %s, deadline = %s,
+                start_date = %s, start_time = %s, frequency = %s
+            WHERE task_id = %s
+        """, (
+            title, description, assigned_to, assigned_by,
+            priority, status, deadline,
+            alarm_settings.get('start_date') if alarm_settings else None,
+            alarm_settings.get('start_time') if alarm_settings else None,
+            alarm_settings.get('frequency') if alarm_settings else None,
+            task_id
+        ))
+
         # Handle alarm settings if provided
         if alarm_settings:
             start_date = alarm_settings.get('start_date')
@@ -1245,22 +1261,6 @@ def update_task(task_id):
                             logger.info(f"Alarm updated for task {task_id}")
                         except Exception as e:
                             logger.error(f"Error sending FCM notification: {str(e)}")
-
-        # Update task basic info
-        cursor.execute("""
-            UPDATE tasks 
-            SET title = %s, description = %s, assigned_to = %s, assigned_by = %s,
-                priority = %s, status = %s, deadline = %s,
-                start_date = %s, start_time = %s, frequency = %s
-            WHERE task_id = %s
-        """, (
-            title, description, assigned_to, assigned_by,
-            priority, normalized_status, deadline,
-            alarm_settings.get('start_date') if alarm_settings else None,
-            alarm_settings.get('start_time') if alarm_settings else None,
-            alarm_settings.get('frequency') if alarm_settings else None,
-            task_id
-        ))
 
         # Handle audio notes
         if audio_notes:
