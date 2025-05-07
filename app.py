@@ -52,7 +52,7 @@ app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key')
 socketio = SocketIO(
     app,
     cors_allowed_origins="*",
-    async_mode='threading',  # Changed back to threading mode
+    async_mode='eventlet',  # Changed to eventlet mode
     ping_timeout=60,
     ping_interval=25,
     logger=True,
@@ -62,23 +62,18 @@ socketio = SocketIO(
     reconnection_attempts=10,
     reconnection_delay=1000,
     reconnection_delay_max=5000,
-    max_http_buffer_size=1e8,
-    path='socket.io',
-    transports=['websocket', 'polling']
+    max_http_buffer_size=1e8
 )
 
 # Add middleware to validate requests
 @app.before_request
 def validate_request():
     if request.path.startswith('/socket.io/'):
-        # Validate WebSocket upgrade request
-        if request.headers.get('Upgrade', '').lower() == 'websocket':
-            if not request.headers.get('Connection', '').lower() == 'upgrade':
-                return 'Invalid WebSocket request', 400
-        # Validate content type for non-WebSocket requests
-        elif request.method in ['POST', 'PUT']:
-            if not request.is_json and request.headers.get('Content-Type') != 'application/json':
-                return 'Content-Type must be application/json', 400
+        return  # Skip validation for socket.io requests
+    # Validate content type for non-WebSocket requests
+    if request.method in ['POST', 'PUT']:
+        if not request.is_json and request.headers.get('Content-Type') != 'application/json':
+            return 'Content-Type must be application/json', 400
 
 # Enhanced error handlers for SocketIO
 @socketio.on_error()
@@ -91,21 +86,13 @@ def default_error_handler(e):
     logger.error(f"SocketIO default error: {str(e)}")
     return {'error': str(e)}
 
+# Initialize connected users dictionary
+connected_users = {}
+
 @socketio.on('connect')
 def handle_connect():
     try:
         logger.info(f"Client connected: {request.sid}")
-        # Validate the connection
-        if not request.sid:
-            logger.error("Invalid connection attempt - no SID")
-            return False
-            
-        # Send connection response
-        socketio.emit('connect_response', {
-            'status': 'connected',
-            'sid': request.sid,
-            'timestamp': datetime.now().isoformat()
-        }, room=request.sid)
         return True
     except Exception as e:
         logger.error(f"Error in handle_connect: {str(e)}")
@@ -135,44 +122,6 @@ def handle_disconnect():
     except Exception as e:
         logger.error(f"Error in handle_disconnect: {str(e)}")
 
-# Setup logging
-logging.basicConfig(
-    level=logging.DEBUG,  # Set to DEBUG for more detailed logs
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('app.log'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
-
-# DB config using environment variables
-db_config = {
-    'host': os.getenv('DB_HOST', '134.209.149.12'),
-    'user': os.getenv('DB_USER', 'root'),
-    'password': os.getenv('DB_PASSWORD', '123'),
-    'database': os.getenv('DB_NAME', 'task_db')
-}
-
-# Store connected users
-connected_users = {}
-
-# Add timezone configuration
-DEFAULT_TIMEZONE = 'Asia/Kolkata'  # Change this to your default timezone
-
-def get_current_time():
-    """Get current time in the configured timezone"""
-    tz = pytz.timezone(DEFAULT_TIMEZONE)
-    return datetime.now(tz)
-
-def convert_to_timezone(dt, from_tz='UTC', to_tz=DEFAULT_TIMEZONE):
-    """Convert datetime from one timezone to another"""
-    from_tz = pytz.timezone(from_tz)
-    to_tz = pytz.timezone(to_tz)
-    if not dt.tzinfo:
-        dt = from_tz.localize(dt)
-    return dt.astimezone(to_tz)
-
 @socketio.on('register')
 def handle_register(data):
     try:
@@ -193,6 +142,41 @@ def handle_register(data):
         }, room=request.sid)
     except Exception as e:
         logger.error(f"Error in handle_register: {str(e)}")
+
+# Setup logging
+logging.basicConfig(
+    level=logging.DEBUG,  # Set to DEBUG for more detailed logs
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('app.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# DB config using environment variables
+db_config = {
+    'host': os.getenv('DB_HOST', '134.209.149.12'),
+    'user': os.getenv('DB_USER', 'root'),
+    'password': os.getenv('DB_PASSWORD', '123'),
+    'database': os.getenv('DB_NAME', 'task_db')
+}
+
+# Add timezone configuration
+DEFAULT_TIMEZONE = 'Asia/Kolkata'  # Change this to your default timezone
+
+def get_current_time():
+    """Get current time in the configured timezone"""
+    tz = pytz.timezone(DEFAULT_TIMEZONE)
+    return datetime.now(tz)
+
+def convert_to_timezone(dt, from_tz='UTC', to_tz=DEFAULT_TIMEZONE):
+    """Convert datetime from one timezone to another"""
+    from_tz = pytz.timezone(from_tz)
+    to_tz = pytz.timezone(to_tz)
+    if not dt.tzinfo:
+        dt = from_tz.localize(dt)
+    return dt.astimezone(to_tz)
 
 def get_db_connection():
     """Get a new database connection"""
@@ -2470,12 +2454,15 @@ if __name__ == '__main__':
     # Initialize the application
     initialize_application()
     
-    # Run the server
+    # Run the server with eventlet
+    import eventlet
+    eventlet.monkey_patch()
+    
     socketio.run(
         app, 
         host='0.0.0.0', 
         port=5000, 
-        debug=True, 
+        debug=True,
         use_reloader=False,
         log_output=True
     ) 
