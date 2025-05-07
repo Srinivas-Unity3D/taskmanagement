@@ -672,45 +672,118 @@ def create_task():
     try:
         data = request.get_json()
         
-        # Extract task data
-        title = data.get('title')
-        description = data.get('description')
-        assigned_to = data.get('assigned_to')
-        assigned_by = data.get('assigned_by')
-        deadline = data.get('deadline')
-        priority = data.get('priority', 'low')
-        status = data.get('status', 'pending')
-        alarm_settings = data.get('alarm_settings')
-        audio_notes = data.get('audio_notes', [])
-        attachments = data.get('attachments', [])
-        
-        logger.info(f"[DEBUG] Received audio_notes: {audio_notes}")
-        
         # Validate required fields
-        if not all([title, description, assigned_to, assigned_by, deadline]):
-            return jsonify({
-                'success': False,
-                'message': 'Missing required fields'
-            }), 400
-        
-        # Connect to database
-        conn = mysql.connector.connect(**db_config)
+        required_fields = ['title', 'description', 'assigned_to', 'assigned_by', 'priority', 'status', 'deadline']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({
+                    'success': False,
+                    'message': f'Missing required field: {field}'
+                }), 400
+
+        title = data['title']
+        description = data['description']
+        assigned_to = data['assigned_to']
+        assigned_by = data['assigned_by']
+        priority = data['priority']
+        status = data['status']
+        deadline = data['deadline']
+        audio_note = data.get('audio_note')
+        attachments = data.get('attachments', [])
+        alarm_settings = data.get('alarm_settings')
+
+        # Initialize database connection
+        conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
-        
-        # Create task
+
+        # Generate task ID
         task_id = str(uuid.uuid4())
+
+        # Insert task
         cursor.execute("""
             INSERT INTO tasks (
                 task_id, title, description, assigned_to,
-                assigned_by, deadline, priority, status
+                assigned_by, priority, status, deadline
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             task_id, title, description, assigned_to,
-            assigned_by, deadline, priority, status
+            assigned_by, priority, status, deadline
         ))
-        
-        # Handle alarm settings if present
+
+        # Handle audio note
+        if audio_note:
+            try:
+                audio_id = str(uuid.uuid4())
+                audio_data = audio_note.get('audio_data')
+                duration = audio_note.get('duration', 0)
+                file_name = audio_note.get('filename', 'voice_note.wav')
+                
+                if audio_data:
+                    # Save audio file
+                    audio_path = os.path.join(AUDIO_FOLDER, f"{audio_id}_{file_name}")
+                    os.makedirs(AUDIO_FOLDER, exist_ok=True)
+                    with open(audio_path, 'wb') as f:
+                        f.write(base64.b64decode(audio_data))
+                    
+                    # Insert audio note record
+                    cursor.execute("""
+                        INSERT INTO task_audio_notes (
+                            audio_id, task_id, file_path, duration, 
+                            file_name, created_by
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                    """, (
+                        audio_id, task_id, audio_path, duration,
+                        file_name, assigned_by
+                    ))
+                    logger.info(f"Added audio note: {audio_id}")
+            except Exception as e:
+                logger.error(f"Error handling audio note: {str(e)}")
+                raise
+
+        # Handle attachments
+        if attachments:
+            for attachment in attachments:
+                try:
+                    attachment_id = str(uuid.uuid4())
+                    file_data = attachment.get('file_data')
+                    file_name = attachment.get('file_name')
+                    file_type = attachment.get('file_type')
+                    
+                    if file_data and file_name:
+                        # Save attachment file
+                        attachment_path = os.path.join(ATTACHMENTS_FOLDER, f"{attachment_id}_{file_name}")
+                        os.makedirs(ATTACHMENTS_FOLDER, exist_ok=True)
+                        with open(attachment_path, 'wb') as f:
+                            f.write(base64.b64decode(file_data))
+                        
+                        # Get file size
+                        file_size = os.path.getsize(attachment_path)
+                        
+                        # Insert attachment record
+                        cursor.execute("""
+                            INSERT INTO task_attachments (
+                                attachment_id, task_id, file_name,
+                                file_path, file_type, file_size,
+                                created_by
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        """, (
+                            attachment_id,
+                            task_id,
+                            file_name,
+                            attachment_path,
+                            file_type,
+                            file_size,
+                            assigned_by
+                        ))
+                        logger.info(f"Added attachment: {attachment_id}")
+                except Exception as e:
+                    logger.error(f"Error handling attachment: {str(e)}")
+                    continue
+
+        # Handle alarm settings
         if alarm_settings:
             alarm_id = str(uuid.uuid4())
             cursor.execute("""
@@ -727,72 +800,7 @@ def create_task():
                 alarm_settings.get('frequency'),
                 assigned_by
             ))
-        
-        # Handle audio notes
-        if audio_notes:
-            try:
-                for note in audio_notes:
-                    audio_id = note.get('file_id', str(uuid.uuid4()))
-                    file_path = note.get('file_path')
-                    audio_duration = note.get('duration', 0)
-                    file_name = note.get('file_name', 'voice_note.wav')
-                    created_by = note.get('created_by', assigned_by)
-                    
-                    if not file_path:
-                        logger.warning(f"Skipping audio note without file path")
-                        continue
-                    
-                    # Insert audio note
-                    cursor.execute("""
-                        INSERT INTO task_audio_notes (
-                            audio_id, task_id, file_path, duration, 
-                            file_name, created_by
-                        )
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                    """, (
-                        audio_id, task_id, file_path, audio_duration,
-                        file_name, created_by
-                    ))
-                    logger.info(f"Added audio note: {audio_id}")
-            except Exception as e:
-                logger.error(f"Error handling audio notes: {str(e)}")
-                raise
-        
-        # Handle attachments
-        for attachment in attachments:
-            try:
-                attachment_id = attachment.get('file_id', str(uuid.uuid4()))
-                file_path = attachment.get('file_path')
-                file_name = attachment.get('file_name')
-                file_type = attachment.get('file_type')
-                file_size = attachment.get('file_size', 0)
-                
-                if not file_path or not file_name:
-                    logger.warning(f"Skipping attachment without file path or name")
-                    continue
-                
-                cursor.execute("""
-                    INSERT INTO task_attachments (
-                        attachment_id, task_id, file_name,
-                        file_path, file_type, file_size,
-                        created_by
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """, (
-                    attachment_id,
-                    task_id,
-                    file_name,
-                    file_path,
-                    file_type,
-                    file_size,
-                    assigned_by
-                ))
-                
-                logger.info(f"Added attachment: {attachment_id}")
-            except Exception as e:
-                logger.error(f"Error adding attachment: {str(e)}")
-                continue
-        
+
         conn.commit()
         
         return jsonify({
@@ -1196,138 +1204,48 @@ def update_task(task_id):
         priority = data['priority']
         status = data['status']
         deadline = data['deadline']
-        audio_notes = data.get('audio_notes', [])
-        new_attachments = data.get('new_attachments', [])
-        existing_attachment_ids = data.get('existing_attachment_ids', [])
+        audio_note = data.get('audio_note')
+        attachments = data.get('attachments', [])
         alarm_settings = data.get('alarm_settings')
 
         # Initialize database connection
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
 
-        # Get current task data
+        # Update task
         cursor.execute("""
-            SELECT * FROM tasks WHERE task_id = %s
-        """, (task_id,))
-        current_task = cursor.fetchone()
-
-        if not current_task:
-            return jsonify({
-                'success': False,
-                'message': 'Task not found',
-                'task_id': task_id
-            }), 404
-
-        # Update task basic info
-        cursor.execute("""
-            UPDATE tasks 
-            SET title = %s, description = %s, assigned_to = %s, assigned_by = %s,
-                priority = %s, status = %s, deadline = %s,
-                start_date = %s, start_time = %s, frequency = %s
+            UPDATE tasks
+            SET title = %s,
+                description = %s,
+                assigned_to = %s,
+                assigned_by = %s,
+                priority = %s,
+                status = %s,
+                deadline = %s,
+                updated_at = NOW()
             WHERE task_id = %s
         """, (
-            title, description, assigned_to, assigned_by,
-            priority, status, deadline,
-            alarm_settings.get('start_date') if alarm_settings else None,
-            alarm_settings.get('start_time') if alarm_settings else None,
-            alarm_settings.get('frequency') if alarm_settings else None,
+            title, description, assigned_to,
+            assigned_by, priority, status, deadline,
             task_id
         ))
 
-        # Handle alarm settings if provided
-        if alarm_settings:
-            start_date = alarm_settings.get('start_date')
-            start_time = alarm_settings.get('start_time')
-            frequency = alarm_settings.get('frequency')
-            
-            if all([start_date, start_time, frequency]):
-                # Get user's timezone
-                cursor.execute("""
-                    SELECT timezone FROM users WHERE username = %s
-                """, (assigned_to,))
-                user = cursor.fetchone()
-                user_timezone = user.get('timezone', DEFAULT_TIMEZONE) if user else DEFAULT_TIMEZONE
-                
-                # Convert start time to user's timezone
-                try:
-                    start_datetime = datetime.strptime(f"{start_date} {start_time}", '%Y-%m-%d %H:%M:%S')
-                    start_datetime = convert_to_timezone(start_datetime, to_tz=user_timezone)
-                    start_time = start_datetime.strftime('%H:%M:%S')
-                except Exception as e:
-                    logger.error(f"Error converting timezone: {str(e)}")
-                
-                # Calculate next alarm time
-                next_alarm_time = calculate_next_alarm_time(start_time, frequency)
-                if next_alarm_time:
-                    # Update or insert alarm settings
-                    cursor.execute("""
-                        INSERT INTO task_alarms (
-                            alarm_id, task_id, start_date, start_time,
-                            frequency, next_alarm_time, created_by
-                        )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
-                        ON DUPLICATE KEY UPDATE
-                            start_date = VALUES(start_date),
-                            start_time = VALUES(start_time),
-                            frequency = VALUES(frequency),
-                            next_alarm_time = VALUES(next_alarm_time)
-                    """, (
-                        str(uuid.uuid4()),
-                        task_id,
-                        start_date,
-                        start_time,
-                        frequency,
-                        next_alarm_time,
-                        assigned_by
-                    ))
-                    
-                    # Send FCM notification for the updated alarm
-                    cursor.execute("""
-                        SELECT fcm_token, timezone FROM users WHERE username = %s
-                    """, (assigned_to,))
-                    user = cursor.fetchone()
-                    
-                    if user and user['fcm_token']:
-                        # Convert alarm time to user's timezone for display
-                        alarm_time = datetime.strptime(start_time, '%H:%M:%S')
-                        alarm_time = convert_to_timezone(alarm_time, to_tz=user.get('timezone', DEFAULT_TIMEZONE))
-                        
-                        message = messaging.Message(
-                            notification=messaging.Notification(
-                                title=f"Task Alarm Updated: {title}",
-                                body=f"Alarm set for {alarm_time.strftime('%H:%M:%S')} with {frequency} frequency"
-                            ),
-                            data={
-                                'type': 'alarm',
-                                'task_id': task_id,
-                                'alarm_time': alarm_time.strftime('%H:%M:%S'),
-                                'frequency': frequency,
-                                'timezone': user.get('timezone', DEFAULT_TIMEZONE)
-                            },
-                            token=user['fcm_token']
-                        )
-                        
-                        try:
-                            messaging.send(message)
-                            logger.info(f"Alarm updated for task {task_id}")
-                        except Exception as e:
-                            logger.error(f"Error sending FCM notification: {str(e)}")
-
-        # Handle audio notes
-        if audio_notes:
+        # Handle audio note
+        if audio_note:
             try:
-                for note in audio_notes:
-                    audio_id = note.get('file_id', str(uuid.uuid4()))
-                    file_path = note.get('file_path')
-                    audio_duration = note.get('duration', 0)
-                    file_name = note.get('file_name', 'voice_note.wav')
-                    created_by = note.get('created_by', assigned_by)
+                audio_id = str(uuid.uuid4())
+                audio_data = audio_note.get('audio_data')
+                duration = audio_note.get('duration', 0)
+                file_name = audio_note.get('filename', 'voice_note.wav')
+                
+                if audio_data:
+                    # Save audio file
+                    audio_path = os.path.join(AUDIO_FOLDER, f"{audio_id}_{file_name}")
+                    os.makedirs(AUDIO_FOLDER, exist_ok=True)
+                    with open(audio_path, 'wb') as f:
+                        f.write(base64.b64decode(audio_data))
                     
-                    if not file_path:
-                        logger.warning(f"Skipping audio note without file path")
-                        continue
-                    
-                    # Insert audio note
+                    # Insert audio note record
                     cursor.execute("""
                         INSERT INTO task_audio_notes (
                             audio_id, task_id, file_path, duration, 
@@ -1335,64 +1253,34 @@ def update_task(task_id):
                         )
                         VALUES (%s, %s, %s, %s, %s, %s)
                     """, (
-                        audio_id, task_id, file_path, audio_duration,
-                        file_name, created_by
+                        audio_id, task_id, audio_path, duration,
+                        file_name, assigned_by
                     ))
                     logger.info(f"Added audio note: {audio_id}")
             except Exception as e:
-                logger.error(f"Error handling audio notes: {str(e)}")
+                logger.error(f"Error handling audio note: {str(e)}")
                 raise
 
         # Handle attachments
-        if new_attachments or existing_attachment_ids:
-            try:
-                # First, get all current attachments
-                cursor.execute("""
-                    SELECT attachment_id, file_path
-                    FROM task_attachments 
-                    WHERE task_id = %s
-                """, (task_id,))
-                current_attachments = cursor.fetchall()
-                
-                # Create a map of current attachment IDs and their file paths
-                current_attachment_map = {
-                    att['attachment_id']: att['file_path'] 
-                    for att in current_attachments
-                }
-                
-                # Delete files and records for attachments not in existing_attachment_ids
-                attachments_to_delete = set(current_attachment_map.keys()) - set(existing_attachment_ids)
-                for att_id in attachments_to_delete:
-                    # Delete the physical file
-                    file_path = os.path.join(
-                        os.path.dirname(os.path.abspath(__file__)),
-                        current_attachment_map[att_id]
-                    )
-                    if os.path.exists(file_path):
-                        os.remove(file_path)
-                        logger.info(f"Deleted file: {file_path}")
-                
-                # Delete database records for removed attachments
-                if attachments_to_delete:
-                    cursor.execute("""
-                        DELETE FROM task_attachments 
-                        WHERE task_id = %s AND attachment_id IN %s
-                    """, (task_id, tuple(attachments_to_delete)))
-                    logger.info(f"Deleted {len(attachments_to_delete)} attachment records")
-                
-                # Add new attachments
-                for attachment in new_attachments:
-                    try:
-                        attachment_id = attachment.get('file_id', str(uuid.uuid4()))
-                        file_path = attachment.get('file_path')
-                        file_name = attachment.get('file_name')
-                        file_type = attachment.get('file_type')
-                        file_size = attachment.get('file_size', 0)
+        if attachments:
+            for attachment in attachments:
+                try:
+                    attachment_id = str(uuid.uuid4())
+                    file_data = attachment.get('file_data')
+                    file_name = attachment.get('file_name')
+                    file_type = attachment.get('file_type')
+                    
+                    if file_data and file_name:
+                        # Save attachment file
+                        attachment_path = os.path.join(ATTACHMENTS_FOLDER, f"{attachment_id}_{file_name}")
+                        os.makedirs(ATTACHMENTS_FOLDER, exist_ok=True)
+                        with open(attachment_path, 'wb') as f:
+                            f.write(base64.b64decode(file_data))
                         
-                        if not file_path or not file_name:
-                            logger.warning(f"Skipping attachment without file path or name")
-                            continue
+                        # Get file size
+                        file_size = os.path.getsize(attachment_path)
                         
+                        # Insert attachment record
                         cursor.execute("""
                             INSERT INTO task_attachments (
                                 attachment_id, task_id, file_name,
@@ -1404,54 +1292,56 @@ def update_task(task_id):
                             attachment_id,
                             task_id,
                             file_name,
-                            file_path,
+                            attachment_path,
                             file_type,
                             file_size,
                             assigned_by
                         ))
-                        
-                        logger.info(f"Added new attachment record: {attachment_id}")
-                    except Exception as e:
-                        logger.error(f"Error processing new attachment: {str(e)}")
-                        continue
+                        logger.info(f"Added attachment: {attachment_id}")
+                except Exception as e:
+                    logger.error(f"Error handling attachment: {str(e)}")
+                    continue
+
+        # Handle alarm settings
+        if alarm_settings:
+            # Delete existing alarm settings
+            cursor.execute("""
+                DELETE FROM task_alarms
+                WHERE task_id = %s
+            """, (task_id,))
             
-            except Exception as e:
-                logger.error(f"Error handling attachments: {str(e)}")
-                raise
+            # Insert new alarm settings
+            alarm_id = str(uuid.uuid4())
+            cursor.execute("""
+                INSERT INTO task_alarms (
+                    alarm_id, task_id, start_date, start_time,
+                    frequency, created_by
+                )
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (
+                alarm_id,
+                task_id,
+                alarm_settings.get('start_date'),
+                alarm_settings.get('start_time'),
+                alarm_settings.get('frequency'),
+                assigned_by
+            ))
 
-        # Commit all changes
         conn.commit()
-
-        # Prepare notification data
-        notification_data = {
-            'task_id': task_id,
-            'title': title,
-            'description': description,
-            'assigned_to': assigned_to,
-            'assigned_by': assigned_by,
-            'updated_by': data.get('updated_by'),
-            'priority': priority,
-            'status': status,
-            'deadline': deadline,
-            'update_time': datetime.now().isoformat()
-        }
-
-        # Notify users about the update
-        notify_task_update(notification_data, 'task_updated')
-
+        
         return jsonify({
             'success': True,
             'message': 'Task updated successfully',
             'task_id': task_id
         }), 200
-
+        
     except Exception as e:
-        logger.error(f"Error updating task: {str(e)}")
         if conn:
             conn.rollback()
+        logger.error(f"Error updating task: {str(e)}")
         return jsonify({
             'success': False,
-            'message': str(e)
+            'message': f"Error updating task: {str(e)}"
         }), 500
     finally:
         if cursor:
