@@ -1201,12 +1201,30 @@ def update_task(task_id):
         description = data['description']
         assigned_to = data['assigned_to']
         assigned_by = data['assigned_by']
-        priority = data['priority']
-        status = data['status']
+        priority = data['priority'].lower()  # Convert to lowercase for consistency
+        status = data['status'].lower()  # Convert to lowercase for consistency
         deadline = data['deadline']
         audio_note = data.get('audio_note')
         attachments = data.get('attachments', [])
         alarm_settings = data.get('alarm_settings')
+
+        # Validate priority
+        valid_priorities = ['low', 'medium', 'high', 'urgent']
+        if priority not in valid_priorities:
+            return jsonify({
+                'success': False,
+                'message': f'Invalid priority: {priority}. Must be one of {valid_priorities}',
+                'task_id': task_id
+            }), 400
+
+        # Validate status
+        valid_statuses = ['pending', 'in_progress', 'completed', 'snoozed']
+        if status not in valid_statuses:
+            return jsonify({
+                'success': False,
+                'message': f'Invalid status: {status}. Must be one of {valid_statuses}',
+                'task_id': task_id
+            }), 400
 
         # Initialize database connection
         conn = get_db_connection()
