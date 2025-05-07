@@ -176,7 +176,8 @@ def convert_to_timezone(dt, from_tz='UTC', to_tz=DEFAULT_TIMEZONE):
 @socketio.on('register')
 def handle_register(data):
     try:
-        username = data.get('username')
+        # Handle both string and dictionary formats
+        username = data if isinstance(data, str) else data.get('username')
         if not username:
             logger.error("No username provided for registration")
             return
@@ -213,6 +214,9 @@ def notify_task_update(task_data, event_type='task_update'):
         assigned_by = task_data.get('assigned_by')
         updated_by = task_data.get('updated_by')
         
+        logger.info(f"Task update notification - Assigned to: {assigned_to}, Assigned by: {assigned_by}, Updated by: {updated_by}")
+        logger.info(f"Current connected users: {connected_users}")
+        
         # Skip if no target users
         if not assigned_to and not assigned_by:
             logger.info("No users to notify")
@@ -222,6 +226,7 @@ def notify_task_update(task_data, event_type='task_update'):
         cursor.execute("SELECT role FROM users WHERE username = %s", (updated_by or assigned_by,))
         result = cursor.fetchone()
         sender_role = result['role'] if result else 'User'
+        logger.info(f"Sender role: {sender_role}")
         
         notification_data = {
             'task': task_data,
@@ -232,25 +237,39 @@ def notify_task_update(task_data, event_type='task_update'):
         
         # Only notify assigned_to if they didn't make the update
         if assigned_to and assigned_to != updated_by:
-            logger.info(f"Notifying assigned user: {assigned_to}")
-            store_notification(task_data, event_type, assigned_to, sender_role)
+            logger.info(f"Attempting to notify assigned user: {assigned_to}")
             if assigned_to in connected_users:
+                logger.info(f"Found socket for {assigned_to}: {connected_users[assigned_to]}")
                 socketio.emit('task_notification', notification_data, room=connected_users[assigned_to])
+                logger.info(f"Notification sent to {assigned_to}")
+            else:
+                logger.warning(f"User {assigned_to} not connected, notification not sent")
+            store_notification(task_data, event_type, assigned_to, sender_role)
+            logger.info(f"Notification stored for {assigned_to}")
         
         # Only notify assigned_by if they didn't make the update and aren't the assignee
         if assigned_by and assigned_by != updated_by and assigned_by != assigned_to:
-            logger.info(f"Notifying assigner: {assigned_by}")
-            store_notification(task_data, event_type, assigned_by, sender_role)
+            logger.info(f"Attempting to notify assigner: {assigned_by}")
             if assigned_by in connected_users:
+                logger.info(f"Found socket for {assigned_by}: {connected_users[assigned_by]}")
                 socketio.emit('task_notification', notification_data, room=connected_users[assigned_by])
+                logger.info(f"Notification sent to {assigned_by}")
+            else:
+                logger.warning(f"User {assigned_by} not connected, notification not sent")
+            store_notification(task_data, event_type, assigned_by, sender_role)
+            logger.info(f"Notification stored for {assigned_by}")
         
         # Broadcast dashboard update to all connected users except the updater
+        logger.info("Broadcasting dashboard update")
         for username, sid in connected_users.items():
             if username != updated_by:
+                logger.info(f"Sending dashboard update to {username}")
                 socketio.emit('dashboard_update', notification_data, room=sid)
+                logger.info(f"Dashboard update sent to {username}")
         
     except Exception as e:
         logger.error(f"Error in notify_task_update: {str(e)}")
+        logger.exception("Full traceback:")
         raise
         
     finally:
