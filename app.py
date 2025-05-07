@@ -52,7 +52,7 @@ app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key')
 socketio = SocketIO(
     app,
     cors_allowed_origins="*",
-    async_mode='eventlet',  # Changed to eventlet mode
+    async_mode='gevent',  # Changed to gevent mode
     ping_timeout=60,
     ping_interval=25,
     logger=True,
@@ -2454,15 +2454,14 @@ if __name__ == '__main__':
     # Initialize the application
     initialize_application()
     
-    # Run the server with eventlet
-    import eventlet
-    eventlet.monkey_patch()
+    # Run the server with gevent
+    from gevent import pywsgi
+    from geventwebsocket.handler import WebSocketHandler
     
-    socketio.run(
-        app, 
-        host='0.0.0.0', 
-        port=5000, 
-        debug=True,
-        use_reloader=False,
-        log_output=True
-    ) 
+    server = pywsgi.WSGIServer(
+        ('0.0.0.0', 5000),
+        app,
+        handler_class=WebSocketHandler
+    )
+    print('Server starting on http://0.0.0.0:5000')
+    server.serve_forever() 
