@@ -2464,6 +2464,73 @@ def health_check():
         'connected_clients': len(connected_users)
     })
 
+# ---------------- DOWNLOAD AUDIO NOTE ----------------
+@app.route('/tasks/<task_id>/audio/<audio_id>/download', methods=['GET'])
+def download_audio_note(task_id, audio_id):
+    conn = None
+    cursor = None
+    try:
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(f"USE {db_config['database']}")
+
+        # Get audio note details
+        cursor.execute("""
+            SELECT file_path, file_name
+            FROM task_audio_notes
+            WHERE task_id = %s AND audio_id = %s
+        """, (task_id, audio_id))
+
+        audio_note = cursor.fetchone()
+        if not audio_note:
+            logger.error(f"Audio note not found - Task ID: {task_id}, Audio ID: {audio_id}")
+            return jsonify({
+                'success': False,
+                'message': 'Audio note not found'
+            }), 404
+
+        # Get the full file path
+        file_path = audio_note['file_path']
+        if not os.path.exists(file_path):
+            logger.error(f"Audio file not found at path: {file_path}")
+            return jsonify({
+                'success': False,
+                'message': 'Audio file not found on server'
+            }), 404
+
+        # Determine the correct mimetype based on file extension
+        extension = audio_note['file_name'].rsplit('.', 1)[1].lower() if '.' in audio_note['file_name'] else ''
+        if extension == 'wav':
+            mimetype = 'audio/wav'
+        elif extension == 'mp3':
+            mimetype = 'audio/mpeg'
+        elif extension == 'm4a':
+            mimetype = 'audio/mp4'
+        elif extension == 'ogg':
+            mimetype = 'audio/ogg'
+        else:
+            mimetype = 'application/octet-stream'
+
+        # Send the file with proper mimetype
+        return send_file(
+            file_path,
+            mimetype=mimetype,
+            as_attachment=False,
+            download_name=audio_note['file_name']
+        )
+
+    except Exception as e:
+        logger.error(f"Error downloading audio note: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': f"Error downloading audio note: {str(e)}"
+        }), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
 # ---------------- MAIN ----------------
 if __name__ == '__main__':
     # Initialize the application
