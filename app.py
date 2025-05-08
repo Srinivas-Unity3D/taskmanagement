@@ -78,6 +78,153 @@ db_config = {
 }
 
 # Initialize database first
+def init_db():
+    try:
+        # First connect without database to create it if needed
+        temp_config = db_config.copy()
+        temp_config.pop('database', None)  # Remove database from config
+        conn = mysql.connector.connect(**temp_config)
+        cursor = conn.cursor()
+
+        # Create database if it doesn't exist
+        cursor.execute(f"CREATE DATABASE IF NOT EXISTS {db_config['database']}")
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        # Now connect to the specific database
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor()
+
+        # Enable foreign key checks
+        cursor.execute("SET FOREIGN_KEY_CHECKS=0")
+
+        # Create users table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id VARCHAR(36) PRIMARY KEY,
+                username VARCHAR(100) UNIQUE NOT NULL,
+                email VARCHAR(255) NOT NULL,
+                phone VARCHAR(20) NOT NULL,
+                password VARCHAR(255) NOT NULL,
+                role VARCHAR(50) NOT NULL,
+                fcm_token VARCHAR(255),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                timezone VARCHAR(50)
+            )
+        """)
+
+        # Create tasks table with optional alarm fields
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS tasks (
+                task_id VARCHAR(36) PRIMARY KEY,
+                title VARCHAR(255) NOT NULL,
+                description TEXT,
+                assigned_by VARCHAR(100) NOT NULL,
+                assigned_to VARCHAR(100) NOT NULL,
+                deadline DATETIME NOT NULL,
+                priority ENUM('low', 'medium', 'high', 'urgent') NOT NULL,
+                status ENUM('pending', 'in_progress', 'completed', 'snoozed') NOT NULL DEFAULT 'pending',
+                start_date DATE,
+                start_time TIME,
+                frequency VARCHAR(50),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                FOREIGN KEY (assigned_by) REFERENCES users(username) ON DELETE CASCADE ON UPDATE CASCADE,
+                FOREIGN KEY (assigned_to) REFERENCES users(username) ON DELETE CASCADE ON UPDATE CASCADE
+            )
+        """)
+
+        # Create task_audio_notes table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS task_audio_notes (
+                audio_id VARCHAR(36) PRIMARY KEY,
+                task_id VARCHAR(36) NOT NULL,
+                file_path VARCHAR(255) NOT NULL,
+                file_name VARCHAR(255) NOT NULL DEFAULT 'voice_note.wav',
+                duration INT,
+                created_by VARCHAR(100),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE,
+                FOREIGN KEY (created_by) REFERENCES users(username) ON DELETE SET NULL ON UPDATE CASCADE
+            )
+        """)
+
+        # Create task_notifications table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS task_notifications (
+                id VARCHAR(36) PRIMARY KEY,
+                task_id VARCHAR(36) NOT NULL,
+                title VARCHAR(255) NOT NULL,
+                description TEXT,
+                sender_name VARCHAR(100) NOT NULL,
+                sender_role VARCHAR(50) NOT NULL,
+                type VARCHAR(50) NOT NULL,
+                is_read BOOLEAN DEFAULT FALSE,
+                status VARCHAR(50) DEFAULT 'active',
+                snooze_until DATETIME,
+                snooze_reason TEXT,
+                snooze_audio LONGTEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                target_user VARCHAR(100) NOT NULL,
+                FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE ON UPDATE CASCADE,
+                FOREIGN KEY (sender_name) REFERENCES users(username) ON DELETE CASCADE ON UPDATE CASCADE,
+                FOREIGN KEY (target_user) REFERENCES users(username) ON DELETE CASCADE ON UPDATE CASCADE
+            )
+        """)
+
+        # Create attachments table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS task_attachments (
+                attachment_id VARCHAR(36) PRIMARY KEY,
+                task_id VARCHAR(36) NOT NULL,
+                file_name VARCHAR(255) NOT NULL,
+                file_type VARCHAR(50),
+                file_size BIGINT,
+                file_path VARCHAR(255) NOT NULL,
+                created_by VARCHAR(100),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE ON UPDATE CASCADE,
+                FOREIGN KEY (created_by) REFERENCES users(username) ON DELETE SET NULL ON UPDATE CASCADE
+            )
+        """)
+
+        # Create task_alarms table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS task_alarms (
+                alarm_id VARCHAR(36) PRIMARY KEY,
+                task_id VARCHAR(36) NOT NULL,
+                start_date DATE,
+                start_time TIME,
+                frequency VARCHAR(50),
+                next_alarm_time TIME,
+                acknowledged BOOLEAN DEFAULT FALSE,
+                acknowledged_at TIMESTAMP NULL,
+                created_by VARCHAR(100),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE ON UPDATE CASCADE,
+                FOREIGN KEY (created_by) REFERENCES users(username) ON DELETE SET NULL ON UPDATE CASCADE
+            )
+        """)
+
+        # Re-enable foreign key checks
+        cursor.execute("SET FOREIGN_KEY_CHECKS=1")
+
+        conn.commit()
+        logger.info("Database tables initialized successfully")
+
+    except Exception as e:
+        logger.error(f"Error initializing database: {str(e)}")
+        if 'conn' in locals():
+            conn.rollback()
+        raise
+    finally:
+        if 'cursor' in locals():
+            cursor.close()
+        if 'conn' in locals():
+            conn.close()
+
+# Now, after the function definition, call init_db()
 try:
     init_db()
     logger.info("Database initialized successfully")
@@ -329,153 +476,6 @@ def notify_task_update(task_data, event_type='task_update'):
         if cursor:
             cursor.close()
         if conn:
-            conn.close()
-
-# Create database tables if they don't exist
-def init_db():
-    try:
-        # First connect without database to create it if needed
-        temp_config = db_config.copy()
-        temp_config.pop('database', None)  # Remove database from config
-        conn = mysql.connector.connect(**temp_config)
-        cursor = conn.cursor()
-
-        # Create database if it doesn't exist
-        cursor.execute(f"CREATE DATABASE IF NOT EXISTS {db_config['database']}")
-        conn.commit()
-        cursor.close()
-        conn.close()
-
-        # Now connect to the specific database
-        conn = mysql.connector.connect(**db_config)
-        cursor = conn.cursor()
-
-        # Enable foreign key checks
-        cursor.execute("SET FOREIGN_KEY_CHECKS=0")
-
-        # Create users table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                user_id VARCHAR(36) PRIMARY KEY,
-                username VARCHAR(100) UNIQUE NOT NULL,
-                email VARCHAR(255) NOT NULL,
-                phone VARCHAR(20) NOT NULL,
-                password VARCHAR(255) NOT NULL,
-                role VARCHAR(50) NOT NULL,
-                fcm_token VARCHAR(255),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                timezone VARCHAR(50)
-            )
-        """)
-
-        # Create tasks table with optional alarm fields
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS tasks (
-                task_id VARCHAR(36) PRIMARY KEY,
-                title VARCHAR(255) NOT NULL,
-                description TEXT,
-                assigned_by VARCHAR(100) NOT NULL,
-                assigned_to VARCHAR(100) NOT NULL,
-                deadline DATETIME NOT NULL,
-                priority ENUM('low', 'medium', 'high', 'urgent') NOT NULL,
-                status ENUM('pending', 'in_progress', 'completed', 'snoozed') NOT NULL DEFAULT 'pending',
-                start_date DATE,
-                start_time TIME,
-                frequency VARCHAR(50),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                FOREIGN KEY (assigned_by) REFERENCES users(username) ON DELETE CASCADE ON UPDATE CASCADE,
-                FOREIGN KEY (assigned_to) REFERENCES users(username) ON DELETE CASCADE ON UPDATE CASCADE
-            )
-        """)
-
-        # Create task_audio_notes table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS task_audio_notes (
-                audio_id VARCHAR(36) PRIMARY KEY,
-                task_id VARCHAR(36) NOT NULL,
-                file_path VARCHAR(255) NOT NULL,
-                file_name VARCHAR(255) NOT NULL DEFAULT 'voice_note.wav',
-                duration INT,
-                created_by VARCHAR(100),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE,
-                FOREIGN KEY (created_by) REFERENCES users(username) ON DELETE SET NULL ON UPDATE CASCADE
-            )
-        """)
-
-        # Create task_notifications table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS task_notifications (
-                id VARCHAR(36) PRIMARY KEY,
-                task_id VARCHAR(36) NOT NULL,
-                title VARCHAR(255) NOT NULL,
-                description TEXT,
-                sender_name VARCHAR(100) NOT NULL,
-                sender_role VARCHAR(50) NOT NULL,
-                type VARCHAR(50) NOT NULL,
-                is_read BOOLEAN DEFAULT FALSE,
-                status VARCHAR(50) DEFAULT 'active',
-                snooze_until DATETIME,
-                snooze_reason TEXT,
-                snooze_audio LONGTEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                target_user VARCHAR(100) NOT NULL,
-                FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE ON UPDATE CASCADE,
-                FOREIGN KEY (sender_name) REFERENCES users(username) ON DELETE CASCADE ON UPDATE CASCADE,
-                FOREIGN KEY (target_user) REFERENCES users(username) ON DELETE CASCADE ON UPDATE CASCADE
-            )
-        """)
-
-        # Create attachments table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS task_attachments (
-                attachment_id VARCHAR(36) PRIMARY KEY,
-                task_id VARCHAR(36) NOT NULL,
-                file_name VARCHAR(255) NOT NULL,
-                file_type VARCHAR(50),
-                file_size BIGINT,
-                file_path VARCHAR(255) NOT NULL,
-                created_by VARCHAR(100),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE ON UPDATE CASCADE,
-                FOREIGN KEY (created_by) REFERENCES users(username) ON DELETE SET NULL ON UPDATE CASCADE
-            )
-        """)
-
-        # Create task_alarms table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS task_alarms (
-                alarm_id VARCHAR(36) PRIMARY KEY,
-                task_id VARCHAR(36) NOT NULL,
-                start_date DATE,
-                start_time TIME,
-                frequency VARCHAR(50),
-                next_alarm_time TIME,
-                acknowledged BOOLEAN DEFAULT FALSE,
-                acknowledged_at TIMESTAMP NULL,
-                created_by VARCHAR(100),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE ON UPDATE CASCADE,
-                FOREIGN KEY (created_by) REFERENCES users(username) ON DELETE SET NULL ON UPDATE CASCADE
-            )
-        """)
-
-        # Re-enable foreign key checks
-        cursor.execute("SET FOREIGN_KEY_CHECKS=1")
-
-        conn.commit()
-        logger.info("Database tables initialized successfully")
-
-    except Exception as e:
-        logger.error(f"Error initializing database: {str(e)}")
-        if 'conn' in locals():
-            conn.rollback()
-        raise
-    finally:
-        if 'cursor' in locals():
-            cursor.close()
-        if 'conn' in locals():
             conn.close()
 
 # Initialize database on startup
