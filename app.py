@@ -95,6 +95,7 @@ def init_db():
         # Now connect to the specific database
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor()
+        cursor.execute(f"USE {db_config['database']}")
 
         # Enable foreign key checks
         cursor.execute("SET FOREIGN_KEY_CHECKS=0")
