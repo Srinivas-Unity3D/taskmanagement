@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify, send_file, Response, send_from_directory
 from flask_cors import CORS
 import mysql.connector
+from mysql.connector import pooling
 import uuid
 import logging
 from datetime import datetime, timedelta
@@ -44,9 +45,85 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 
 # Production configurations
-app.config['DEBUG'] = True  # Enable debug for development
-app.config['ENV'] = 'development'  # Set to development environment
+app.config['DEBUG'] = False  # Disable debug in production
+app.config['ENV'] = 'production'  # Set to production environment
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key')
+
+# DB config using environment variables
+db_config = {
+    'host': os.getenv('DB_HOST', '134.209.149.12'),
+    'user': os.getenv('DB_USER', 'root'),
+    'password': os.getenv('DB_PASSWORD', '123'),
+    'database': os.getenv('DB_NAME', 'task_db'),
+    'pool_name': 'mypool',
+    'pool_size': 5,
+    'connect_timeout': 10,
+    'use_pure': True,
+    'autocommit': True,
+    'get_warnings': True,
+    'raise_on_warnings': True,
+    'connection_timeout': 180,
+    'pool_reset_session': True
+}
+
+# Create connection pool
+try:
+    connection_pool = mysql.connector.pooling.MySQLConnectionPool(**db_config)
+    logger.info("Database connection pool created successfully")
+except Exception as e:
+    logger.error(f"Error creating connection pool: {str(e)}")
+    raise
+
+def get_db_connection():
+    """Get a connection from the pool with retry logic"""
+    max_retries = 3
+    retry_delay = 1  # seconds
+    
+    for attempt in range(max_retries):
+        try:
+            connection = connection_pool.get_connection()
+            if connection.is_connected():
+                return connection
+        except mysql.connector.Error as err:
+            logger.error(f"Database connection attempt {attempt + 1} failed: {str(err)}")
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+            else:
+                raise
+    
+    raise Exception("Failed to get database connection after multiple attempts")
+
+# Add a periodic connection check
+def check_db_connection():
+    """Periodically check database connection and recreate pool if needed"""
+    while True:
+        try:
+            conn = get_db_connection()
+            if conn.is_connected():
+                conn.close()
+                logger.info("Database connection check successful")
+            else:
+                logger.warning("Database connection lost, attempting to reconnect...")
+                global connection_pool
+                connection_pool = mysql.connector.pooling.MySQLConnectionPool(**db_config)
+        except Exception as e:
+            logger.error(f"Database connection check failed: {str(e)}")
+            try:
+                global connection_pool
+                connection_pool = mysql.connector.pooling.MySQLConnectionPool(**db_config)
+            except Exception as pool_err:
+                logger.error(f"Failed to recreate connection pool: {str(pool_err)}")
+        
+        time.sleep(300)  # Check every 5 minutes
+
+# Start the connection check thread
+connection_check_thread = threading.Thread(target=check_db_connection, daemon=True)
+connection_check_thread.start()
+
+# Configure Flask app
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 
 # Updated SocketIO configuration
 socketio = SocketIO(
@@ -154,14 +231,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# DB config using environment variables
-db_config = {
-    'host': os.getenv('DB_HOST', '134.209.149.12'),
-    'user': os.getenv('DB_USER', 'root'),
-    'password': os.getenv('DB_PASSWORD', '123'),
-    'database': os.getenv('DB_NAME', 'task_db')
-}
-
 # Add timezone configuration
 DEFAULT_TIMEZONE = 'Asia/Kolkata'  # Change this to your default timezone
 
@@ -177,14 +246,6 @@ def convert_to_timezone(dt, from_tz='UTC', to_tz=DEFAULT_TIMEZONE):
     if not dt.tzinfo:
         dt = from_tz.localize(dt)
     return dt.astimezone(to_tz)
-
-def get_db_connection():
-    """Get a new database connection"""
-    try:
-        return mysql.connector.connect(**db_config)
-    except mysql.connector.Error as e:
-        logger.error(f"Error connecting to database: {e}")
-        raise
 
 def notify_task_update(task_data, event_type='task_update'):
     """Notify relevant users about task updates"""

@@ -1,15 +1,14 @@
 [Unit]
-Description=Task Management Application
+Description=Task Management Database Monitor
 After=network.target mysql.service
 Requires=mysql.service
-StartLimitIntervalSec=0
 
 [Service]
 User=root
 WorkingDirectory=/var/task_management/taskmanagement
 Environment="PATH=/var/task_management/taskmanagement/venv/bin"
 EnvironmentFile=/var/task_management/taskmanagement/.env
-ExecStart=/var/task_management/taskmanagement/venv/bin/gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:5000 wsgi:app
+ExecStart=/var/task_management/taskmanagement/venv/bin/python3 db_monitor.py
 Restart=always
 RestartSec=5
 StartLimitBurst=5
@@ -20,11 +19,6 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=yes
-
-# Resource limits
-LimitNOFILE=65535
-TimeoutStartSec=300
-TimeoutStopSec=300
 
 [Install]
 WantedBy=multi-user.target 
