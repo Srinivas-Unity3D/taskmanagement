@@ -18,6 +18,17 @@ import time
 import threading
 import pytz  # Add this import at the top
 
+# Setup logging
+logging.basicConfig(
+    level=logging.DEBUG,  # Set to DEBUG for more detailed logs
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('app.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
 # Load environment variables
 load_dotenv()
 
@@ -65,6 +76,14 @@ db_config = {
     'connection_timeout': 180,
     'pool_reset_session': True
 }
+
+# Initialize database first
+try:
+    init_db()
+    logger.info("Database initialized successfully")
+except Exception as e:
+    logger.error(f"Error initializing database: {str(e)}")
+    raise
 
 # Create connection pool
 connection_pool = None
@@ -220,17 +239,6 @@ def handle_register(data):
         }, room=request.sid)
     except Exception as e:
         logger.error(f"Error in handle_register: {str(e)}")
-
-# Setup logging
-logging.basicConfig(
-    level=logging.DEBUG,  # Set to DEBUG for more detailed logs
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('app.log'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
 
 # Add timezone configuration
 DEFAULT_TIMEZONE = 'Asia/Kolkata'  # Change this to your default timezone
