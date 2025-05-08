@@ -85,8 +85,7 @@ except Exception as e:
     logger.error(f"Error initializing database: {str(e)}")
     raise
 
-# Create connection pool
-connection_pool = None
+# Create connection pool after database initialization
 try:
     connection_pool = mysql.connector.pooling.MySQLConnectionPool(**db_config)
     logger.info("Database connection pool created successfully")
