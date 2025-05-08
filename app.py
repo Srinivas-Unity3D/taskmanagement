@@ -87,10 +87,14 @@ def init_db():
         cursor = conn.cursor()
 
         # Create database if it doesn't exist
-        cursor.execute(f"CREATE DATABASE IF NOT EXISTS {db_config['database']}")
-        conn.commit()
-        cursor.close()
-        conn.close()
+        try:
+            cursor.execute(f"CREATE DATABASE IF NOT EXISTS {db_config['database']}")
+            conn.commit()
+        except mysql.connector.Error as e:
+            if e.errno == 1007:  # Database exists
+                logger.warning(f"Database already exists: {db_config['database']}")
+            else:
+                raise
 
         # Now connect to the specific database
         conn = mysql.connector.connect(**db_config)
