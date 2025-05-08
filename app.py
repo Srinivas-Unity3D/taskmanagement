@@ -414,6 +414,7 @@ def notify_task_update(task_data, event_type='task_update'):
     try:
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
+        cursor.execute(f"USE {db_config['database']}")
         
         assigned_to = task_data.get('assigned_to')
         assigned_by = task_data.get('assigned_by')
@@ -490,6 +491,7 @@ def update_tasks_table():
     try:
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor()
+        cursor.execute(f"USE {db_config['database']}")
 
         # Add alarm-related columns if they don't exist
         try:
@@ -583,6 +585,7 @@ def update_audio_notes_table():
     try:
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor()
+        cursor.execute(f"USE {db_config['database']}")
 
         # Check if file_name column exists
         cursor.execute("""
@@ -652,6 +655,7 @@ def signup():
 
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor(dictionary=True)
+        cursor.execute(f"USE {db_config['database']}")
 
         cursor.execute("SELECT * FROM users WHERE username = %s", (data['username'],))
         if cursor.fetchone():
@@ -689,6 +693,7 @@ def login():
 
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor(dictionary=True)
+        cursor.execute(f"USE {db_config['database']}")
 
         # First verify user credentials
         cursor.execute("""
@@ -769,6 +774,7 @@ def create_task():
         # Initialize database connection
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
+        cursor.execute(f"USE {db_config['database']}")
 
         # Generate task ID
         task_id = str(uuid.uuid4())
@@ -912,6 +918,7 @@ def get_tasks():
 
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor(dictionary=True)
+        cursor.execute(f"USE {db_config['database']}")
 
         try:
             # First, check if the columns exist
@@ -1060,6 +1067,7 @@ def get_users():
     try:
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor()
+        cursor.execute(f"USE {db_config['database']}")
         cursor.execute("SELECT username FROM users")
         users = [row[0] for row in cursor.fetchall()]
         return jsonify(users), 200
@@ -1079,6 +1087,7 @@ def get_attachment(attachment_id):
     try:
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor(dictionary=True)
+        cursor.execute(f"USE {db_config['database']}")
 
         cursor.execute("""
             SELECT file_name, file_type, file_size, file_path
@@ -1145,6 +1154,7 @@ def get_task_audio_notes(task_id):
     try:
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor(dictionary=True)
+        cursor.execute(f"USE {db_config['database']}")
         cursor.execute("""
             SELECT audio_id, file_path, duration, created_by, file_name, created_at
             FROM task_audio_notes
@@ -1181,6 +1191,7 @@ def get_task_assignments(user_id):
     try:
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor(dictionary=True)
+        cursor.execute(f"USE {db_config['database']}")
 
         # First get the user's role and username
         cursor.execute("SELECT role, username FROM users WHERE user_id = %s", (user_id,))
@@ -1303,6 +1314,7 @@ def update_task(task_id):
         # Initialize database connection
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
+        cursor.execute(f"USE {db_config['database']}")
 
         # Update task
         cursor.execute("""
@@ -1447,6 +1459,7 @@ def get_task_voice_notes(task_id):
     try:
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
+        cursor.execute(f"USE {db_config['database']}")
         cursor.execute("""
             SELECT file_path, duration, created_by, file_name, created_at
             FROM task_audio_notes
@@ -1479,6 +1492,7 @@ def get_task_attachments(task_id):
     try:
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor(dictionary=True)
+        cursor.execute(f"USE {db_config['database']}")
 
         cursor.execute("""
             SELECT 
@@ -1527,6 +1541,7 @@ def download_attachment(attachment_id):
     try:
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor(dictionary=True)
+        cursor.execute(f"USE {db_config['database']}")
 
         cursor.execute("""
             SELECT file_name, file_type, file_path
@@ -1575,6 +1590,7 @@ def mark_notification_read(notification_id):
     try:
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor()
+        cursor.execute(f"USE {db_config['database']}")
         cursor.execute("""
             UPDATE task_notifications SET is_read = 1 WHERE id = %s
         """, (notification_id,))
@@ -1608,6 +1624,7 @@ def get_notifications():
 
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor(dictionary=True)
+        cursor.execute(f"USE {db_config['database']}")
 
         # Get user's role
         cursor.execute("SELECT role FROM users WHERE user_id = %s", (user_id,))
@@ -1678,6 +1695,7 @@ def store_notification(task_data, event_type, target_user, sender_role):
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
+        cursor.execute(f"USE {db_config['database']}")
 
         # Get the user who made the update
         updated_by = task_data.get('updated_by')
@@ -1762,6 +1780,7 @@ def snooze_notification():
         
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor()
+        cursor.execute(f"USE {db_config['database']}")
         
         # Update notification status and snooze details
         cursor.execute("""
@@ -1805,6 +1824,7 @@ def cleanup_task_files(task_id):
     try:
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor(dictionary=True)
+        cursor.execute(f"USE {db_config['database']}")
         
         # Get audio files
         cursor.execute("""
@@ -1848,6 +1868,7 @@ def get_fcm_token():
         # Connect to the database
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor(dictionary=True)
+        cursor.execute(f"USE {db_config['database']}")
 
         # Look up the userid for the given username
         cursor.execute("SELECT user_id, fcm_token FROM users WHERE username = %s", (username,))
@@ -1890,6 +1911,7 @@ def update_fcm_token():
         
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor()
+        cursor.execute(f"USE {db_config['database']}")
         
         cursor.execute("""
             UPDATE users 
@@ -2060,6 +2082,7 @@ def accept_all_notifications():
 
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor()
+        cursor.execute(f"USE {db_config['database']}")
         cursor.execute("""
             UPDATE task_notifications SET is_read = 1 WHERE target_user = %s
         """, (username,))
@@ -2133,6 +2156,7 @@ def schedule_alarm(task_id):
             
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor(dictionary=True)
+        cursor.execute(f"USE {db_config['database']}")
         
         # Get task details
         cursor.execute("""
@@ -2281,6 +2305,7 @@ def acknowledge_alarm(task_id):
             
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor()
+        cursor.execute(f"USE {db_config['database']}")
         
         # Mark alarm as acknowledged
         cursor.execute("""
@@ -2322,6 +2347,7 @@ def alarm_service():
         try:
             conn = mysql.connector.connect(**db_config)
             cursor = conn.cursor(dictionary=True)
+            cursor.execute(f"USE {db_config['database']}")
             
             # Get current time
             now = datetime.now()
