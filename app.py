@@ -67,6 +67,7 @@ db_config = {
 }
 
 # Create connection pool
+connection_pool = None
 try:
     connection_pool = mysql.connector.pooling.MySQLConnectionPool(**db_config)
     logger.info("Database connection pool created successfully")
@@ -76,6 +77,7 @@ except Exception as e:
 
 def get_db_connection():
     """Get a connection from the pool with retry logic"""
+    global connection_pool
     max_retries = 3
     retry_delay = 1  # seconds
     
@@ -97,6 +99,7 @@ def get_db_connection():
 # Add a periodic connection check
 def check_db_connection():
     """Periodically check database connection and recreate pool if needed"""
+    global connection_pool
     while True:
         try:
             conn = get_db_connection()
@@ -105,12 +108,10 @@ def check_db_connection():
                 logger.info("Database connection check successful")
             else:
                 logger.warning("Database connection lost, attempting to reconnect...")
-                global connection_pool
                 connection_pool = mysql.connector.pooling.MySQLConnectionPool(**db_config)
         except Exception as e:
             logger.error(f"Database connection check failed: {str(e)}")
             try:
-                global connection_pool
                 connection_pool = mysql.connector.pooling.MySQLConnectionPool(**db_config)
             except Exception as pool_err:
                 logger.error(f"Failed to recreate connection pool: {str(pool_err)}")
