@@ -1180,7 +1180,7 @@ def get_task_audio_notes(task_id):
         cursor = conn.cursor(dictionary=True)
         cursor.execute(f"USE {db_config['database']}")
         cursor.execute("""
-            SELECT audio_id, file_path, duration, created_by, file_name, created_at
+            SELECT audio_id, file_path, duration, created_by, file_name, created_at, note_type
             FROM task_audio_notes
             WHERE task_id = %s
             ORDER BY created_at DESC
@@ -1196,7 +1196,8 @@ def get_task_audio_notes(task_id):
                 'duration': note['duration'],
                 'created_by': note['created_by'],
                 'file_name': note['file_name'],
-                'created_at': note['created_at'].isoformat() if note['created_at'] else None
+                'created_at': note['created_at'].isoformat() if note['created_at'] else None,
+                'note_type': note.get('note_type')
             }
             formatted_notes.append(formatted_note)
         return jsonify(formatted_notes), 200
@@ -1502,7 +1503,7 @@ def get_task_voice_notes(task_id):
         cursor = conn.cursor(dictionary=True)
         cursor.execute(f"USE {db_config['database']}")
         cursor.execute("""
-            SELECT file_path, duration, created_by, file_name, created_at
+            SELECT file_path, duration, created_by, file_name, created_at, note_type
             FROM task_audio_notes
             WHERE task_id = %s
             ORDER BY created_at DESC
@@ -1517,7 +1518,8 @@ def get_task_voice_notes(task_id):
                 'duration': note['duration'],
                 'created_by': note['created_by'],
                 'file_name': note.get('file_name'),
-                'created_at': note['created_at'].isoformat() if note['created_at'] else None
+                'created_at': note['created_at'].isoformat() if note['created_at'] else None,
+                'note_type': note.get('note_type')
             }
             formatted_notes.append(formatted_note)
         return jsonify(formatted_notes), 200
