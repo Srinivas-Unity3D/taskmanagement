@@ -55,9 +55,9 @@ CORS(app, resources={
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 
-# Production configurations
-app.config['DEBUG'] = False  # Disable debug in production
-app.config['ENV'] = 'production'  # Set to production environment
+# Environment-based configurations
+app.config['DEBUG'] = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
+app.config['ENV'] = os.getenv('FLASK_ENV', 'production')
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key')
 
 # DB config using environment variables
@@ -2540,10 +2540,14 @@ if __name__ == '__main__':
     from gevent import pywsgi
     from geventwebsocket.handler import WebSocketHandler
     
+    # Set port based on environment
+    env = os.getenv('FLASK_ENV', 'production')
+    port = 5001 if env == 'development' else 5000
+    
     server = pywsgi.WSGIServer(
-        ('0.0.0.0', 5000),
+        ('0.0.0.0', port),
         app,
         handler_class=WebSocketHandler
     )
-    print('Server starting on http://0.0.0.0:5000')
+    print(f'Server starting on http://0.0.0.0:{port} in {env} mode')
     server.serve_forever() 

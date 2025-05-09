@@ -1,5 +1,5 @@
 [Unit]
-Description=Task Management Application
+Description=Task Management Development Application
 After=network.target mysql.service
 Requires=mysql.service
 StartLimitIntervalSec=0
@@ -10,10 +10,10 @@ User=root
 Group=root
 WorkingDirectory=/var/task_management/taskmanagement
 Environment="PATH=/var/task_management/taskmanagement/venv/bin"
-Environment="FLASK_ENV=production"
-Environment="FLASK_DEBUG=0"
-EnvironmentFile=/var/task_management/taskmanagement/.env
-ExecStart=/var/task_management/taskmanagement/venv/bin/gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:5000 app:app
+Environment="FLASK_ENV=development"
+Environment="FLASK_DEBUG=1"
+EnvironmentFile=/var/task_management/taskmanagement/.env.dev
+ExecStart=/var/task_management/taskmanagement/venv/bin/gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:5001 app:app
 Restart=always
 RestartSec=5
 StartLimitBurst=5
