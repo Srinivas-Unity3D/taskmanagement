@@ -2465,18 +2465,19 @@ def health_check():
     })
 
 # ---------------- DOWNLOAD AUDIO NOTE ----------------
-@app.route('/tasks/<task_id>/audio/<audio_id>/download', methods=['GET'])
+@app.route('/api/tasks/<task_id>/audio/<audio_id>/download', methods=['GET'])
 def download_audio_note(task_id, audio_id):
     conn = None
     cursor = None
     try:
+        logger.info(f"Attempting to download audio note - Task ID: {task_id}, Audio ID: {audio_id}")
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor(dictionary=True)
         cursor.execute(f"USE {db_config['database']}")
 
         # Get audio note details
         cursor.execute("""
-            SELECT file_path, file_name
+            SELECT file_path, file_name, audio_id
             FROM task_audio_notes
             WHERE task_id = %s AND audio_id = %s
         """, (task_id, audio_id))
@@ -2491,6 +2492,8 @@ def download_audio_note(task_id, audio_id):
 
         # Get the full file path
         file_path = audio_note['file_path']
+        logger.info(f"Found audio file at path: {file_path}")
+        
         if not os.path.exists(file_path):
             logger.error(f"Audio file not found at path: {file_path}")
             return jsonify({
@@ -2511,6 +2514,8 @@ def download_audio_note(task_id, audio_id):
         else:
             mimetype = 'application/octet-stream'
 
+        logger.info(f"Sending file with mimetype: {mimetype}")
+        
         # Send the file with proper mimetype
         return send_file(
             file_path,
