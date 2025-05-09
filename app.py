@@ -2490,18 +2490,29 @@ def download_audio_note(task_id, audio_id):
                 'message': 'Audio note not found'
             }), 404
 
-        # Get the full file path
         file_path = audio_note['file_path']
-        logger.info(f"Found audio file at path: {file_path}")
-        
-        if not os.path.exists(file_path):
-            logger.error(f"Audio file not found at path: {file_path}")
+        logger.info(f"File path from DB: {file_path}")
+
+        # Try absolute path first
+        abs_exists = os.path.exists(file_path)
+        logger.info(f"Absolute path exists: {abs_exists}")
+
+        # Try relative path from project root
+        rel_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), file_path.lstrip('/'))
+        rel_exists = os.path.exists(rel_path)
+        logger.info(f"Relative path checked: {rel_path}, exists: {rel_exists}")
+
+        if abs_exists:
+            serve_path = file_path
+        elif rel_exists:
+            serve_path = rel_path
+        else:
+            logger.error(f"Audio file not found at absolute or relative path. Absolute: {file_path}, Relative: {rel_path}")
             return jsonify({
                 'success': False,
-                'message': 'Audio file not found on server'
+                'message': f'Audio file not found. Checked absolute: {file_path}, relative: {rel_path}'
             }), 404
 
-        # Determine the correct mimetype based on file extension
         extension = audio_note['file_name'].rsplit('.', 1)[1].lower() if '.' in audio_note['file_name'] else ''
         if extension == 'wav':
             mimetype = 'audio/wav'
@@ -2514,11 +2525,9 @@ def download_audio_note(task_id, audio_id):
         else:
             mimetype = 'application/octet-stream'
 
-        logger.info(f"Sending file with mimetype: {mimetype}")
-        
-        # Send the file with proper mimetype
+        logger.info(f"Sending file: {serve_path} with mimetype: {mimetype}")
         return send_file(
-            file_path,
+            serve_path,
             mimetype=mimetype,
             as_attachment=False,
             download_name=audio_note['file_name']
