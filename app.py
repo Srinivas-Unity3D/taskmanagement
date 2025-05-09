@@ -805,6 +805,7 @@ def create_task():
                 audio_data = audio_note.get('audio_data')
                 duration = audio_note.get('duration', 0)
                 file_name = audio_note.get('filename', 'voice_note.wav')
+                created_by = data.get('updated_by', assigned_by)
                 
                 if audio_data:
                     # Save audio file
@@ -822,7 +823,7 @@ def create_task():
                         VALUES (%s, %s, %s, %s, %s, %s)
                     """, (
                         audio_id, task_id, audio_path, duration,
-                        file_name, assigned_by
+                        file_name, created_by
                     ))
                     logger.info(f"Added audio note: {audio_id}")
             except Exception as e:
@@ -1348,6 +1349,7 @@ def update_task(task_id):
                 audio_data = audio_note.get('audio_data')
                 duration = audio_note.get('duration', 0)
                 file_name = audio_note.get('filename', 'voice_note.wav')
+                created_by = data.get('updated_by', assigned_by)
                 
                 if audio_data:
                     # Save audio file
@@ -1365,7 +1367,7 @@ def update_task(task_id):
                         VALUES (%s, %s, %s, %s, %s, %s)
                     """, (
                         audio_id, task_id, audio_path, duration,
-                        file_name, assigned_by
+                        file_name, created_by
                     ))
                     logger.info(f"Added audio note: {audio_id}")
             except Exception as e:
