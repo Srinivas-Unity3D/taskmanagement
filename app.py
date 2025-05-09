@@ -891,6 +891,21 @@ def create_task():
 
         conn.commit()
         
+        # Notify about task creation
+        try:
+            notify_task_update({
+                'task_id': task_id,
+                'title': title,
+                'description': description,
+                'assigned_to': assigned_to,
+                'assigned_by': assigned_by,
+                'priority': priority,
+                'status': status,
+                'deadline': deadline
+            }, 'task_created')
+        except Exception as e:
+            logger.error(f"Error sending task creation notification: {str(e)}")
+        
         return jsonify({
             'success': True,
             'message': 'Task created successfully',
@@ -1441,6 +1456,22 @@ def update_task(task_id):
             ))
 
         conn.commit()
+        
+        # Notify about task update
+        try:
+            notify_task_update({
+                'task_id': task_id,
+                'title': title,
+                'description': description,
+                'assigned_to': assigned_to,
+                'assigned_by': assigned_by,
+                'priority': priority,
+                'status': status,
+                'deadline': deadline,
+                'updated_by': data.get('updated_by')
+            }, 'task_updated')
+        except Exception as e:
+            logger.error(f"Error sending task update notification: {str(e)}")
         
         return jsonify({
             'success': True,
