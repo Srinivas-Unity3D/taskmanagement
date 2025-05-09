@@ -152,6 +152,7 @@ def init_db():
                     duration INT,
                     created_by VARCHAR(100),
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    note_type VARCHAR(20) NOT NULL DEFAULT 'normal',  -- 'normal' or 'snooze'
                     FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE,
                     FOREIGN KEY (created_by) REFERENCES users(username) ON DELETE SET NULL ON UPDATE CASCADE
                 )
@@ -594,30 +595,30 @@ def update_audio_notes_table():
         cursor = conn.cursor()
         cursor.execute(f"USE {db_config['database']}")
 
-        # Check if file_name column exists
+        # Check if note_type column exists
         cursor.execute("""
             SELECT COUNT(*) as count
             FROM information_schema.columns
             WHERE table_schema = %s
             AND table_name = 'task_audio_notes'
-            AND column_name = 'file_name'
+            AND column_name = 'note_type'
         """, (db_config['database'],))
 
         result = cursor.fetchone()
         if result[0] == 0:  # Column doesn't exist
-            logger.info("Adding file_name column to task_audio_notes table...")
+            logger.info("Adding note_type column to task_audio_notes table...")
             try:
                 cursor.execute("""
                     ALTER TABLE task_audio_notes
-                    ADD COLUMN file_name VARCHAR(255) NOT NULL DEFAULT 'voice_note.wav'
+                    ADD COLUMN note_type VARCHAR(20) NOT NULL DEFAULT 'normal'
                 """)
                 conn.commit()
-                logger.info("Successfully added file_name column")
+                logger.info("Successfully added note_type column")
             except mysql.connector.Error as e:
                 if e.errno != 1060:  # Ignore "column already exists" error
                     raise e
         else:
-            logger.info("file_name column already exists in task_audio_notes table")
+            logger.info("note_type column already exists in task_audio_notes table")
 
     except Exception as e:
         logger.error(f"Error updating task_audio_notes table: {str(e)}")
@@ -818,12 +819,12 @@ def create_task():
                     cursor.execute("""
                         INSERT INTO task_audio_notes (
                             audio_id, task_id, file_path, duration, 
-                            file_name, created_by
+                            file_name, created_by, note_type
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
                     """, (
                         audio_id, task_id, audio_path, duration,
-                        file_name, created_by
+                        file_name, created_by, 'normal'
                     ))
                     logger.info(f"Added audio note: {audio_id}")
             except Exception as e:
@@ -1377,12 +1378,12 @@ def update_task(task_id):
                     cursor.execute("""
                         INSERT INTO task_audio_notes (
                             audio_id, task_id, file_path, duration, 
-                            file_name, created_by
+                            file_name, created_by, note_type
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
                     """, (
                         audio_id, task_id, audio_path, duration,
-                        file_name, created_by
+                        file_name, created_by, 'normal'
                     ))
                     logger.info(f"Added audio note: {audio_id}")
             except Exception as e:
@@ -1811,6 +1812,7 @@ def snooze_notification():
         snooze_until = data.get('snooze_until')
         reason = data.get('reason')
         audio_note = data.get('audio_note')
+        updated_by = data.get('updated_by')
         
         if not notification_id or not snooze_until:
             return jsonify({
@@ -1819,9 +1821,56 @@ def snooze_notification():
             }), 400
         
         conn = mysql.connector.connect(**db_config)
-        cursor = conn.cursor()
+        cursor = conn.cursor(dictionary=True)
         cursor.execute(f"USE {db_config['database']}")
         
+        # Get the related task_id from the notification
+        cursor.execute("SELECT task_id FROM task_notifications WHERE id = %s", (notification_id,))
+        notif = cursor.fetchone()
+        if not notif or not notif['task_id']:
+            return jsonify({'success': False, 'message': 'Notification or related task not found'}), 404
+        task_id = notif['task_id']
+
+        # Get current task description
+        cursor.execute("SELECT description FROM tasks WHERE task_id = %s", (task_id,))
+        task = cursor.fetchone()
+        if not task:
+            return jsonify({'success': False, 'message': 'Task not found'}), 404
+        old_description = task['description'] or ''
+
+        # Prepare snooze reason with date/time
+        now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        reason_text = f"Snoozed on {now_str}: {reason}" if reason else None
+        new_description = old_description
+        if reason_text:
+            new_description = (old_description + '\n' if old_description else '') + reason_text
+
+        # Update the task: set status to snoozed, append reason
+        cursor.execute("""
+            UPDATE tasks SET status = 'snoozed', description = %s, updated_at = NOW() WHERE task_id = %s
+        """, (new_description, task_id))
+
+        # If audio_note is present, save as snooze audio note
+        if audio_note and audio_note.get('audio_data'):
+            audio_id = str(uuid.uuid4())
+            audio_data = audio_note.get('audio_data')
+            duration = audio_note.get('duration', 0)
+            file_name = audio_note.get('filename', 'voice_note.wav')
+            created_by = updated_by or None
+            audio_path = os.path.join(AUDIO_FOLDER, f"{audio_id}_{file_name}")
+            os.makedirs(AUDIO_FOLDER, exist_ok=True)
+            with open(audio_path, 'wb') as f:
+                f.write(base64.b64decode(audio_data))
+            cursor.execute("""
+                INSERT INTO task_audio_notes (
+                    audio_id, task_id, file_path, duration, 
+                    file_name, created_by, note_type
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (
+                audio_id, task_id, audio_path, duration,
+                file_name, created_by, 'snooze'
+            ))
+
         # Update notification status and snooze details
         cursor.execute("""
             UPDATE task_notifications 
@@ -1831,7 +1880,7 @@ def snooze_notification():
                 snooze_audio = %s,
                 is_read = FALSE
             WHERE id = %s
-        """, (snooze_until, reason, audio_note, notification_id))
+        """, (snooze_until, reason, audio_note.get('audio_data') if audio_note else None, notification_id))
         
         if cursor.rowcount == 0:
             return jsonify({
@@ -1840,9 +1889,21 @@ def snooze_notification():
             }), 404
         
         conn.commit()
+
+        # Emit dashboard update event (if using SocketIO)
+        try:
+            notify_task_update({
+                'task_id': task_id,
+                'status': 'snoozed',
+                'description': new_description,
+                'updated_by': updated_by
+            }, 'task_snoozed')
+        except Exception as e:
+            logger.error(f"Error sending dashboard update after snooze: {str(e)}")
+
         return jsonify({
             'success': True,
-            'message': 'Notification snoozed successfully'
+            'message': 'Notification snoozed and task updated successfully'
         })
         
     except Exception as e:
