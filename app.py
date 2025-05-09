@@ -307,7 +307,7 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 socketio = SocketIO(
     app,
     cors_allowed_origins="*",
-    async_mode='gevent',  # Changed to gevent mode
+    async_mode='eventlet',  # Changed to eventlet mode for compatibility
     ping_timeout=60,
     ping_interval=25,
     logger=True,
