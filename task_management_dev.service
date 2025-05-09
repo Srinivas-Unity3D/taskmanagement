@@ -9,11 +9,10 @@ Type=simple
 User=root
 Group=root
 WorkingDirectory=/var/task_management_dev
-Environment="PATH=/var/task_management_dev/venv/bin"
 Environment="FLASK_ENV=development"
 Environment="FLASK_DEBUG=1"
 EnvironmentFile=/var/task_management_dev/.env.dev
-ExecStart=/var/task_management_dev/venv/bin/gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:5001 app:app
+ExecStart=/bin/bash -c 'source /var/task_management_dev/venv/bin/activate && exec gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:5001 app:app'
 Restart=always
 RestartSec=5
 StartLimitBurst=5
