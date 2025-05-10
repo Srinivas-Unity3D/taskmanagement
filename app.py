@@ -356,28 +356,16 @@ def handle_connect():
         return False
 
 @socketio.on('disconnect')
-def handle_disconnect():
+def handle_disconnect(sid=None):
     try:
-        sid = request.sid
-        if not sid:
-            logger.error("Invalid disconnect - no SID")
-            return
-            
         # Find and remove the disconnected user
-        username_to_remove = None
-        for username, connected_sid in connected_users.items():
-            if connected_sid == sid:
-                username_to_remove = username
+        for username, user_sid in connected_users.items():
+            if user_sid == sid:
+                app.logger.info(f"User {username} disconnected")
+                del connected_users[username]
                 break
-        
-        if username_to_remove:
-            logger.info(f"User {username_to_remove} disconnected")
-            del connected_users[username_to_remove]
-        
-        logger.info(f"Client disconnected: {sid}")
-        logger.info(f"Current connected users: {connected_users}")
     except Exception as e:
-        logger.error(f"Error in handle_disconnect: {str(e)}")
+        app.logger.error(f"Error handling disconnect: {str(e)}")
 
 @socketio.on('register')
 def handle_register(data):
