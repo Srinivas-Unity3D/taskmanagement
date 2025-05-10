@@ -2658,6 +2658,14 @@ def get_alarm_settings(task_id):
         """, (task_id,))
         alarm = cursor.fetchone()
         if alarm:
+            # Convert start_time from timedelta to string if needed
+            if isinstance(alarm.get('start_time'), timedelta):
+                # Format as HH:MM:SS
+                total_seconds = int(alarm['start_time'].total_seconds())
+                hours = total_seconds // 3600
+                minutes = (total_seconds % 3600) // 60
+                seconds = total_seconds % 60
+                alarm['start_time'] = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
             return jsonify({'success': True, 'alarm_settings': alarm}), 200
         else:
             return jsonify({'success': False, 'message': 'No alarm settings found'}), 404
