@@ -4,7 +4,7 @@ import mysql.connector
 from mysql.connector import pooling
 import uuid
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from flask_socketio import SocketIO, emit
 import json
 import os
@@ -17,6 +17,7 @@ from firebase_admin import messaging
 import time
 import threading
 import pytz  # Add this import at the top
+import traceback
 
 # Setup logging
 logging.basicConfig(
@@ -417,37 +418,77 @@ def convert_to_timezone(dt, from_tz='UTC', to_tz=DEFAULT_TIMEZONE):
 
 def notify_task_update(task_data, event_type='task_update'):
     """Notify relevant users about task updates"""
-    conn = None
-    cursor = None
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute(f"USE {db_config['database']}")
-        
+        # Extract task details
+        task_id = task_data.get('id')
         assigned_to = task_data.get('assigned_to')
         assigned_by = task_data.get('assigned_by')
         updated_by = task_data.get('updated_by')
+        title = task_data.get('title', 'Task Update')
+        description = task_data.get('description', '')
+        priority = task_data.get('priority', 'normal')
+        due_date = task_data.get('due_date')
+        alarm_time = task_data.get('alarm_time')
+        frequency = task_data.get('frequency', '0')
         
-        logger.info(f"Task update notification - Assigned to: {assigned_to}, Assigned by: {assigned_by}, Updated by: {updated_by}")
-        logger.info(f"Current connected users: {connected_users}")
-        
-        # Skip if no target users
-        if not assigned_to and not assigned_by:
-            logger.info("No users to notify")
-            return
-            
         # Get sender's role
-        cursor.execute("SELECT role FROM users WHERE username = %s", (updated_by or assigned_by,))
-        result = cursor.fetchone()
-        sender_role = result['role'] if result else 'User'
-        logger.info(f"Sender role: {sender_role}")
+        sender_role = 'user'
+        if updated_by:
+            sender = User.query.filter_by(username=updated_by).first()
+            if sender:
+                sender_role = sender.role
         
+        # Prepare notification data
         notification_data = {
-            'task': task_data,
             'type': event_type,
-            'sender_role': sender_role,
-            'timestamp': datetime.now().isoformat()
+            'task': {
+                'id': task_id,
+                'title': title,
+                'description': description,
+                'priority': priority,
+                'due_date': due_date,
+                'assigned_to': assigned_to,
+                'assigned_by': assigned_by,
+                'updated_by': updated_by,
+                'alarm_time': alarm_time,
+                'frequency': frequency
+            }
         }
+        
+        # If this is an alarm notification
+        if alarm_time:
+            # Convert alarm time to UTC and local time
+            utc_alarm_time = datetime.strptime(alarm_time, '%Y-%m-%d %H:%M:%S')
+            local_alarm_time = utc_alarm_time.replace(tzinfo=timezone.utc).astimezone()
+            
+            # Calculate next alarm time based on frequency
+            next_alarm_time = calculate_next_alarm_time(
+                local_alarm_time.strftime('%H:%M:%S'),
+                frequency
+            )
+            
+            # Prepare alarm notification data
+            alarm_notification = {
+                'type': 'alarm',
+                'task_id': task_id,
+                'alarm_id': f"{task_id}_{int(time.time())}",
+                'title': title,
+                'body': description or 'Time to check your task!',
+                'frequency': frequency,
+                'utc_alarm_time': utc_alarm_time.isoformat(),
+                'local_alarm_time': local_alarm_time.isoformat(),
+                'next_alarm_time': next_alarm_time
+            }
+            
+            # Send alarm notification to assigned user
+            if assigned_to and assigned_to in connected_users:
+                logger.info(f"Sending alarm notification to {assigned_to}")
+                socketio.emit('alarm_notification', alarm_notification, room=connected_users[assigned_to])
+                logger.info(f"Alarm notification sent to {assigned_to}")
+                
+                # Schedule next alarm if frequency is set
+                if frequency and frequency != '0' and next_alarm_time:
+                    schedule_next_alarm(task_id, next_alarm_time, frequency, assigned_to)
         
         # Only notify assigned_to if they didn't make the update
         if assigned_to and assigned_to != updated_by:
@@ -477,20 +518,12 @@ def notify_task_update(task_data, event_type='task_update'):
         logger.info("Broadcasting dashboard update")
         for username, sid in connected_users.items():
             if username != updated_by:
-                logger.info(f"Sending dashboard update to {username}")
-                socketio.emit('dashboard_update', notification_data, room=sid)
+                socketio.emit('dashboard_update', {'type': 'task_update'}, room=sid)
                 logger.info(f"Dashboard update sent to {username}")
         
     except Exception as e:
         logger.error(f"Error in notify_task_update: {str(e)}")
-        logger.exception("Full traceback:")
-        raise
-        
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+        logger.error(traceback.format_exc())
 
 # Initialize database on startup
 def update_tasks_table():
@@ -2211,7 +2244,7 @@ def calculate_next_alarm_time(start_time, frequency):
         now = datetime.now()
         current_time = now.time()
         
-        # Calculate next alarm time
+        # Calculate next alarm time based on frequency
         if frequency == '30min':
             interval = timedelta(minutes=30)
         elif frequency == '1hour':
@@ -2220,6 +2253,10 @@ def calculate_next_alarm_time(start_time, frequency):
             interval = timedelta(hours=2)
         elif frequency == '4hours':
             interval = timedelta(hours=4)
+        elif frequency == 'daily':
+            interval = timedelta(days=1)
+        elif frequency == 'weekly':
+            interval = timedelta(weeks=1)
         else:
             return None
             
@@ -2232,6 +2269,53 @@ def calculate_next_alarm_time(start_time, frequency):
     except Exception as e:
         logger.error(f"Error calculating next alarm time: {str(e)}")
         return None
+
+def schedule_next_alarm(task_id, next_alarm_time, frequency, assigned_to):
+    """Schedule the next alarm based on frequency"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(f"USE {db_config['database']}")
+        
+        # Get task and user details
+        cursor.execute("""
+            SELECT t.title, t.description, u.timezone
+            FROM tasks t
+            JOIN users u ON t.assigned_to = u.username
+            WHERE t.task_id = %s
+        """, (task_id,))
+        
+        task = cursor.fetchone()
+        if not task:
+            logger.error(f"Task not found: {task_id}")
+            return
+            
+        # Convert next alarm time to user's timezone
+        user_timezone = task.get('timezone', DEFAULT_TIMEZONE)
+        next_alarm_datetime = datetime.strptime(next_alarm_time, '%H:%M:%S')
+        next_alarm_datetime = convert_to_timezone(next_alarm_datetime, to_tz=user_timezone)
+        
+        # Update task_alarms table with next alarm time
+        cursor.execute("""
+            UPDATE task_alarms
+            SET next_alarm_time = %s,
+                acknowledged = FALSE,
+                acknowledged_at = NULL
+            WHERE task_id = %s
+        """, (next_alarm_datetime.strftime('%H:%M:%S'), task_id))
+        
+        conn.commit()
+        logger.info(f"Scheduled next alarm for task {task_id} at {next_alarm_time}")
+        
+    except Exception as e:
+        logger.error(f"Error scheduling next alarm: {str(e)}")
+        if conn:
+            conn.rollback()
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 @app.route('/tasks/<task_id>/schedule_alarm', methods=['POST'])
 def schedule_alarm(task_id):
@@ -2448,7 +2532,7 @@ def alarm_service():
     """Background service to check and trigger alarms"""
     while True:
         try:
-            conn = mysql.connector.connect(**db_config)
+            conn = get_db_connection()
             cursor = conn.cursor(dictionary=True)
             cursor.execute(f"USE {db_config['database']}")
             
@@ -2458,7 +2542,7 @@ def alarm_service():
             
             # Find alarms that need to be triggered
             cursor.execute("""
-                SELECT ta.*, t.title, u.fcm_token, u.timezone
+                SELECT ta.*, t.title, t.description, u.fcm_token, u.timezone, t.assigned_to
                 FROM task_alarms ta
                 JOIN tasks t ON ta.task_id = t.task_id
                 JOIN users u ON t.assigned_to = u.username
@@ -2476,61 +2560,39 @@ def alarm_service():
                     alarm_time = datetime.strptime(alarm['next_alarm_time'].strftime('%H:%M:%S'), '%H:%M:%S')
                     alarm_time = convert_to_timezone(alarm_time, to_tz=user_timezone)
                     
-                    # Send FCM notification with high priority
-                    message = messaging.Message(
-                        notification=messaging.Notification(
-                            title=f"Task Reminder: {alarm['title']}",
-                            body=f"Time to check your task!"
-                        ),
-                        data={
-                            'type': 'alarm',
-                            'task_id': alarm['task_id'],
-                            'alarm_id': alarm['alarm_id'],
-                            'alarm_time': alarm_time.strftime('%H:%M:%S'),
-                            'frequency': alarm['frequency']
-                        },
-                        android=messaging.AndroidConfig(
-                            priority='high',
-                            notification=messaging.AndroidNotification(
-                                priority='max',
-                                sound='default',
-                                channel_id='task_alarms',
-                                importance='high',
-                                visibility='public',
-                                default_sound=True,
-                                default_vibrate_timings=True,
-                                default_light_settings=True
-                            )
-                        ),
-                        apns=messaging.APNSConfig(
-                            payload=messaging.APNSPayload(
-                                aps=messaging.Aps(
-                                    sound='default',
-                                    badge=1,
-                                    content_available=True
-                                )
-                            )
-                        ),
-                        token=alarm['fcm_token']
-                    )
-                    
-                    messaging.send(message)
-                    logger.info(f"Alarm triggered for task {alarm['task_id']}")
-                    
-                    # Calculate and update next alarm time
+                    # Calculate next alarm time
                     next_alarm_time = calculate_next_alarm_time(
                         alarm['next_alarm_time'].strftime('%H:%M:%S'),
                         alarm['frequency']
                     )
                     
-                    if next_alarm_time:
-                        cursor.execute("""
-                            UPDATE task_alarms
-                            SET next_alarm_time = %s,
-                                acknowledged = FALSE
-                            WHERE alarm_id = %s
-                        """, (next_alarm_time, alarm['alarm_id']))
-                        conn.commit()
+                    # Prepare alarm notification
+                    alarm_notification = {
+                        'type': 'alarm',
+                        'task_id': alarm['task_id'],
+                        'alarm_id': alarm['alarm_id'],
+                        'title': f"Task Reminder: {alarm['title']}",
+                        'body': alarm['description'] or 'Time to check your task!',
+                        'frequency': alarm['frequency'],
+                        'utc_alarm_time': alarm_time.astimezone(timezone.utc).isoformat(),
+                        'local_alarm_time': alarm_time.isoformat(),
+                        'next_alarm_time': next_alarm_time
+                    }
+                    
+                    # Send notification through socket
+                    if alarm['assigned_to'] in connected_users:
+                        socketio.emit('alarm_notification', alarm_notification, 
+                                    room=connected_users[alarm['assigned_to']])
+                        logger.info(f"Alarm triggered for task {alarm['task_id']}")
+                    
+                    # Schedule next alarm if frequency is set
+                    if next_alarm_time and alarm['frequency'] != '0':
+                        schedule_next_alarm(
+                            alarm['task_id'],
+                            next_alarm_time,
+                            alarm['frequency'],
+                            alarm['assigned_to']
+                        )
                         
                 except Exception as e:
                     logger.error(f"Error processing alarm {alarm['alarm_id']}: {str(e)}")
