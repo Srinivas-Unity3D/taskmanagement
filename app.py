@@ -2661,3 +2661,31 @@ if __name__ == '__main__':
     )
     print(f'Server starting on http://0.0.0.0:{port} in {env} mode')
     server.serve_forever() 
+
+@app.route('/tasks/<task_id>/alarm_settings', methods=['GET'])
+def get_alarm_settings(task_id):
+    conn = None
+    cursor = None
+    try:
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(f"USE {db_config['database']}")
+        cursor.execute("""
+            SELECT start_date, start_time, frequency
+            FROM task_alarms
+            WHERE task_id = %s
+            ORDER BY created_at DESC
+            LIMIT 1
+        """, (task_id,))
+        alarm = cursor.fetchone()
+        if alarm:
+            return jsonify({'success': True, 'alarm_settings': alarm}), 200
+        else:
+            return jsonify({'success': False, 'message': 'No alarm settings found'}), 404
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close() 
