@@ -2641,27 +2641,6 @@ def download_audio_note(task_id, audio_id):
         if conn:
             conn.close()
 
-# ---------------- MAIN ----------------
-if __name__ == '__main__':
-    # Initialize the application
-    initialize_application()
-    
-    # Run the server with gevent
-    from gevent import pywsgi
-    from geventwebsocket.handler import WebSocketHandler
-    
-    # Set port based on environment
-    env = os.getenv('FLASK_ENV', 'production')
-    port = 5001 if env == 'development' else 5000
-    
-    server = pywsgi.WSGIServer(
-        ('0.0.0.0', port),
-        app,
-        handler_class=WebSocketHandler
-    )
-    print(f'Server starting on http://0.0.0.0:{port} in {env} mode')
-    server.serve_forever() 
-
 @app.route('/tasks/<task_id>/alarm_settings', methods=['GET'])
 def get_alarm_settings(task_id):
     conn = None
@@ -2688,4 +2667,25 @@ def get_alarm_settings(task_id):
         if cursor:
             cursor.close()
         if conn:
-            conn.close() 
+            conn.close()
+
+# ---------------- MAIN ----------------
+if __name__ == '__main__':
+    # Initialize the application
+    initialize_application()
+    
+    # Run the server with gevent
+    from gevent import pywsgi
+    from geventwebsocket.handler import WebSocketHandler
+    
+    # Set port based on environment
+    env = os.getenv('FLASK_ENV', 'production')
+    port = 5001 if env == 'development' else 5000
+    
+    server = pywsgi.WSGIServer(
+        ('0.0.0.0', port),
+        app,
+        handler_class=WebSocketHandler
+    )
+    print(f'Server starting on http://0.0.0.0:{port} in {env} mode')
+    server.serve_forever() 
