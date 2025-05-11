@@ -947,6 +947,8 @@ def create_task():
 # ---------------- GET TASKS ----------------
 @app.route('/tasks', methods=['GET'])
 def get_tasks():
+    conn = None
+    cursor = None
     try:
         # Get query parameters
         username = request.args.get('username')
@@ -957,7 +959,7 @@ def get_tasks():
         if not username or not role:
             return jsonify([]), 400  # Return empty list on error
 
-        conn = mysql.connector.connect(**db_config)
+        conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
         cursor.execute(f"USE {db_config['database']}")
 
