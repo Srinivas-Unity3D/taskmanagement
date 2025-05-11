@@ -407,13 +407,15 @@ def get_current_time():
     tz = pytz.timezone(DEFAULT_TIMEZONE)
     return datetime.now(tz)
 
-def convert_to_timezone(dt, from_tz='UTC', to_tz=DEFAULT_TIMEZONE):
-    """Convert datetime from one timezone to another"""
-    from_tz = pytz.timezone(from_tz)
-    to_tz = pytz.timezone(to_tz)
-    if not dt.tzinfo:
-        dt = from_tz.localize(dt)
-    return dt.astimezone(to_tz)
+def convert_to_timezone(dt, to_tz=DEFAULT_TIMEZONE):
+    """Convert datetime to specified timezone"""
+    try:
+        if dt.tzinfo is None:
+            dt = pytz.UTC.localize(dt)
+        return dt.astimezone(pytz.timezone(to_tz))
+    except Exception as e:
+        logger.error(f"Error converting timezone: {str(e)}")
+        return dt
 
 def notify_task_update(task_data, event_type='task_update'):
     """Notify relevant users about task updates"""
@@ -2212,14 +2214,18 @@ def calculate_next_alarm_time(start_time, frequency):
         current_time = now.time()
         
         # Calculate next alarm time
-        if frequency == '30min':
+        if frequency == '30 minutes':
             interval = timedelta(minutes=30)
-        elif frequency == '1hour':
+        elif frequency == '1 hour':
             interval = timedelta(hours=1)
-        elif frequency == '2hours':
+        elif frequency == '2 hours':
             interval = timedelta(hours=2)
-        elif frequency == '4hours':
+        elif frequency == '4 hours':
             interval = timedelta(hours=4)
+        elif frequency == '6 hours':
+            interval = timedelta(hours=6)
+        elif frequency == '8 hours':
+            interval = timedelta(hours=8)
         else:
             return None
             
@@ -2458,13 +2464,14 @@ def alarm_service():
             
             # Find alarms that need to be triggered
             cursor.execute("""
-                SELECT ta.*, t.title, u.fcm_token, u.timezone
+                SELECT ta.*, t.title, t.assigned_to, u.fcm_token, u.timezone
                 FROM task_alarms ta
                 JOIN tasks t ON ta.task_id = t.task_id
                 JOIN users u ON t.assigned_to = u.username
                 WHERE ta.next_alarm_time <= %s
                 AND u.fcm_token IS NOT NULL
                 AND (ta.acknowledged = FALSE OR ta.acknowledged IS NULL)
+                AND t.status != 'completed'
             """, (current_time,))
             
             alarms = cursor.fetchall()
@@ -2544,8 +2551,8 @@ def alarm_service():
             if 'conn' in locals():
                 conn.close()
             
-        # Sleep for 1 minute before next check
-        time.sleep(60)
+        # Sleep for 30 seconds before next check
+        time.sleep(30)
 
 # Start alarm service in a separate thread
 alarm_thread = threading.Thread(target=alarm_service, daemon=True)
