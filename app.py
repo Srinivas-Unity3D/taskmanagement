@@ -36,7 +36,7 @@ load_dotenv()
 try:
     # Check if Firebase is already initialized
     if not os.getenv('FIREBASE_CREDENTIALS'):
-        logger.warning("FIREBASE_CREDENTIALS environment variable not set")
+        logger.warning("FIREBASE_CREDENTIALS environment variable not set - Firebase features will be disabled")
     else:
         # Parse the credentials from environment variable
         cred_dict = json.loads(os.getenv('FIREBASE_CREDENTIALS'))
@@ -44,8 +44,8 @@ try:
         initialize_app(cred)
         logger.info("Firebase Admin SDK initialized successfully")
 except Exception as e:
-    logger.error(f"Error initializing Firebase Admin SDK: {str(e)}")
-    raise
+    logger.warning(f"Firebase initialization skipped: {str(e)}")
+    # Don't raise the error, just log it and continue
 
 # Configure upload folder
 UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
@@ -2471,7 +2471,7 @@ def alarm_service():
         conn = None
         cursor = None
         try:
-            conn = get_db_connection()  # Use the connection pool
+            conn = get_db_connection()
             cursor = conn.cursor(dictionary=True)
             cursor.execute(f"USE {db_config['database']}")
             
@@ -2486,7 +2486,6 @@ def alarm_service():
                 JOIN tasks t ON ta.task_id = t.task_id
                 JOIN users u ON t.assigned_to = u.username
                 WHERE ta.next_alarm_time <= %s
-                AND u.fcm_token IS NOT NULL
                 AND (ta.acknowledged = FALSE OR ta.acknowledged IS NULL)
                 AND t.status != 'completed'
             """, (current_time,))
@@ -2506,39 +2505,25 @@ def alarm_service():
                         )
                         user_alarm_time = convert_to_timezone(alarm_time, user_timezone)
                         
-                        # Send FCM notification
-                        message = messaging.Message(
-                            notification=messaging.Notification(
-                                title=f"Task Reminder: {alarm['title']}",
-                                body=f"Time to check your task!"
-                            ),
-                            data={
-                                'type': 'alarm',
-                                'task_id': alarm['task_id'],
-                                'alarm_id': alarm['alarm_id']
-                            },
-                            android=messaging.AndroidConfig(
-                                priority=messaging.AndroidPriority.high,
-                                notification=messaging.AndroidNotification(
-                                    sound='default',
-                                    priority=messaging.AndroidNotificationPriority.high,
-                                    channel_id='task_alarms'
+                        # Try to send FCM notification if Firebase is configured
+                        if os.getenv('FIREBASE_CREDENTIALS') and alarm['fcm_token']:
+                            try:
+                                message = messaging.Message(
+                                    notification=messaging.Notification(
+                                        title=f"Task Reminder: {alarm['title']}",
+                                        body=f"Time to check your task!"
+                                    ),
+                                    data={
+                                        'type': 'alarm',
+                                        'task_id': alarm['task_id'],
+                                        'alarm_id': alarm['alarm_id']
+                                    },
+                                    token=alarm['fcm_token']
                                 )
-                            ),
-                            apns=messaging.APNSConfig(
-                                payload=messaging.APNSPayload(
-                                    aps=messaging.Aps(
-                                        sound='default',
-                                        badge=1,
-                                        content_available=True
-                                    )
-                                )
-                            ),
-                            token=alarm['fcm_token']
-                        )
-                        
-                        messaging.send(message)
-                        logger.info(f"Alarm triggered for task {alarm['task_id']}")
+                                messaging.send(message)
+                                logger.info(f"Alarm triggered for task {alarm['task_id']}")
+                            except Exception as e:
+                                logger.warning(f"Failed to send FCM notification: {str(e)}")
                         
                         # Calculate and update next alarm time
                         next_alarm_time = calculate_next_alarm_time(
