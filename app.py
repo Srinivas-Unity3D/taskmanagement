@@ -13,7 +13,7 @@ import base64
 import io
 from werkzeug.utils import secure_filename
 import shutil
-from firebase_admin import messaging
+from firebase_admin import messaging, initialize_app, credentials
 import time
 import threading
 import pytz  # Add this import at the top
@@ -31,6 +31,21 @@ logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
+
+# Initialize Firebase Admin SDK
+try:
+    # Check if Firebase is already initialized
+    if not os.getenv('FIREBASE_CREDENTIALS'):
+        logger.warning("FIREBASE_CREDENTIALS environment variable not set")
+    else:
+        # Parse the credentials from environment variable
+        cred_dict = json.loads(os.getenv('FIREBASE_CREDENTIALS'))
+        cred = credentials.Certificate(cred_dict)
+        initialize_app(cred)
+        logger.info("Firebase Admin SDK initialized successfully")
+except Exception as e:
+    logger.error(f"Error initializing Firebase Admin SDK: {str(e)}")
+    raise
 
 # Configure upload folder
 UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
@@ -2453,8 +2468,10 @@ def acknowledge_alarm(task_id):
 def alarm_service():
     """Background service to check and trigger alarms"""
     while True:
+        conn = None
+        cursor = None
         try:
-            conn = mysql.connector.connect(**db_config)
+            conn = get_db_connection()  # Use the connection pool
             cursor = conn.cursor(dictionary=True)
             cursor.execute(f"USE {db_config['database']}")
             
@@ -2476,79 +2493,78 @@ def alarm_service():
             
             alarms = cursor.fetchall()
             
-            for alarm in alarms:
-                try:
-                    # Convert alarm time to user's timezone
-                    user_timezone = alarm.get('timezone', DEFAULT_TIMEZONE)
-                    alarm_time = datetime.strptime(alarm['next_alarm_time'].strftime('%H:%M:%S'), '%H:%M:%S')
-                    alarm_time = convert_to_timezone(alarm_time, to_tz=user_timezone)
-                    
-                    # Send FCM notification with high priority
-                    message = messaging.Message(
-                        notification=messaging.Notification(
-                            title=f"Task Reminder: {alarm['title']}",
-                            body=f"Time to check your task!"
-                        ),
-                        data={
-                            'type': 'alarm',
-                            'task_id': alarm['task_id'],
-                            'alarm_id': alarm['alarm_id'],
-                            'alarm_time': alarm_time.strftime('%H:%M:%S'),
-                            'frequency': alarm['frequency']
-                        },
-                        android=messaging.AndroidConfig(
-                            priority='high',
-                            notification=messaging.AndroidNotification(
-                                priority='max',
-                                sound='default',
-                                channel_id='task_alarms',
-                                importance='high',
-                                visibility='public',
-                                default_sound=True,
-                                default_vibrate_timings=True,
-                                default_light_settings=True
-                            )
-                        ),
-                        apns=messaging.APNSConfig(
-                            payload=messaging.APNSPayload(
-                                aps=messaging.Aps(
-                                    sound='default',
-                                    badge=1,
-                                    content_available=True
-                                )
-                            )
-                        ),
-                        token=alarm['fcm_token']
-                    )
-                    
-                    messaging.send(message)
-                    logger.info(f"Alarm triggered for task {alarm['task_id']}")
-                    
-                    # Calculate and update next alarm time
-                    next_alarm_time = calculate_next_alarm_time(
-                        alarm['next_alarm_time'].strftime('%H:%M:%S'),
-                        alarm['frequency']
-                    )
-                    
-                    if next_alarm_time:
-                        cursor.execute("""
-                            UPDATE task_alarms
-                            SET next_alarm_time = %s,
-                                acknowledged = FALSE
-                            WHERE alarm_id = %s
-                        """, (next_alarm_time, alarm['alarm_id']))
-                        conn.commit()
+            if alarms:
+                logger.info(f"Found {len(alarms)} alarms to trigger")
+                
+                for alarm in alarms:
+                    try:
+                        # Convert alarm time to user's timezone
+                        user_timezone = alarm['timezone'] or 'UTC'
+                        alarm_time = datetime.combine(
+                            datetime.today(),
+                            alarm['next_alarm_time']
+                        )
+                        user_alarm_time = convert_to_timezone(alarm_time, user_timezone)
                         
-                except Exception as e:
-                    logger.error(f"Error processing alarm {alarm['alarm_id']}: {str(e)}")
-                    continue
-                    
+                        # Send FCM notification
+                        message = messaging.Message(
+                            notification=messaging.Notification(
+                                title=f"Task Reminder: {alarm['title']}",
+                                body=f"Time to check your task!"
+                            ),
+                            data={
+                                'type': 'alarm',
+                                'task_id': alarm['task_id'],
+                                'alarm_id': alarm['alarm_id']
+                            },
+                            android=messaging.AndroidConfig(
+                                priority=messaging.AndroidPriority.high,
+                                notification=messaging.AndroidNotification(
+                                    sound='default',
+                                    priority=messaging.AndroidNotificationPriority.high,
+                                    channel_id='task_alarms'
+                                )
+                            ),
+                            apns=messaging.APNSConfig(
+                                payload=messaging.APNSPayload(
+                                    aps=messaging.Aps(
+                                        sound='default',
+                                        badge=1,
+                                        content_available=True
+                                    )
+                                )
+                            ),
+                            token=alarm['fcm_token']
+                        )
+                        
+                        messaging.send(message)
+                        logger.info(f"Alarm triggered for task {alarm['task_id']}")
+                        
+                        # Calculate and update next alarm time
+                        next_alarm_time = calculate_next_alarm_time(
+                            alarm['next_alarm_time'].strftime('%H:%M:%S'),
+                            alarm['frequency']
+                        )
+                        
+                        if next_alarm_time:
+                            cursor.execute("""
+                                UPDATE task_alarms
+                                SET next_alarm_time = %s,
+                                    acknowledged = FALSE
+                                WHERE alarm_id = %s
+                            """, (next_alarm_time, alarm['alarm_id']))
+                            conn.commit()
+                            
+                    except Exception as e:
+                        logger.error(f"Error processing alarm {alarm['alarm_id']}: {str(e)}")
+                        continue
+                        
         except Exception as e:
             logger.error(f"Error in alarm service: {str(e)}")
         finally:
-            if 'cursor' in locals():
+            if cursor:
                 cursor.close()
-            if 'conn' in locals():
+            if conn:
                 conn.close()
             
         # Sleep for 30 seconds before next check
