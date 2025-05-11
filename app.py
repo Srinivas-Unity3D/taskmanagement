@@ -79,8 +79,13 @@ app.config['ENV'] = os.getenv('FLASK_ENV', 'production')
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key')
 
 # JWT Configuration
+jwt_expires_env = os.getenv('JWT_ACCESS_TOKEN_EXPIRES', '7')
+if jwt_expires_env.endswith('d'):
+    days = int(jwt_expires_env[:-1])
+else:
+    days = int(jwt_expires_env)
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=days)
 app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'your-jwt-secret-key')
-app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=int(os.getenv('JWT_ACCESS_TOKEN_EXPIRES', '7')))
 app.config['JWT_TOKEN_LOCATION'] = ['headers']
 app.config['JWT_HEADER_NAME'] = 'Authorization'
 app.config['JWT_HEADER_TYPE'] = 'Bearer'
