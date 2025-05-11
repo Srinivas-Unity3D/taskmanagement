@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify, send_file, Response, send_from_directory
 from flask_cors import CORS
+from flask_jwt_extended import JWTManager, get_jwt_identity, jwt_required
 import mysql.connector
 from mysql.connector import pooling
 import uuid
@@ -18,6 +19,7 @@ import time
 import threading
 import pytz  # Add this import at the top
 import requests
+from auth import generate_tokens, jwt_token_required, role_required
 
 # Setup logging
 logging.basicConfig(
@@ -75,6 +77,16 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 app.config['DEBUG'] = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
 app.config['ENV'] = os.getenv('FLASK_ENV', 'production')
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key')
+
+# JWT Configuration
+app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'your-jwt-secret-key')
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=int(os.getenv('JWT_ACCESS_TOKEN_EXPIRES', '7')))
+app.config['JWT_TOKEN_LOCATION'] = ['headers']
+app.config['JWT_HEADER_NAME'] = 'Authorization'
+app.config['JWT_HEADER_TYPE'] = 'Bearer'
+
+# Initialize JWT
+jwt = JWTManager(app)
 
 # DB config using environment variables
 db_config = {
@@ -752,12 +764,22 @@ def login():
         else:
             logger.warning(f"No FCM token provided for user: {user['username']}")
 
+        # Generate JWT tokens
+        tokens = generate_tokens({
+            'user_id': user['user_id'],
+            'username': user['username'],
+            'role': user['role']
+        })
+
         return jsonify({
             'message': 'Login successful',
             'user_id': user['user_id'],
             'username': user['username'],
             'role': user['role'],
-            'fcm_token_updated': bool(fcm_token)
+            'fcm_token_updated': bool(fcm_token),
+            'access_token': tokens['access_token'],
+            'refresh_token': tokens['refresh_token'],
+            'expires_in': tokens['expires_in']
         }), 200
 
     except Exception as e:
@@ -767,6 +789,48 @@ def login():
         if cursor:
             cursor.close()
         if conn:
+            conn.close()
+
+# Add a token refresh endpoint
+@app.route('/refresh_token', methods=['POST'])
+@jwt_required(refresh=True)
+def refresh_token():
+    try:
+        # Get user identity from refresh token
+        user_id = get_jwt_identity()
+        
+        # Connect to database to get current user data
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(f"USE {db_config['database']}")
+        
+        # Get user details
+        cursor.execute("SELECT username, role FROM users WHERE user_id = %s", (user_id,))
+        user = cursor.fetchone()
+        
+        if not user:
+            return jsonify({'message': 'User not found'}), 404
+            
+        # Generate new tokens
+        tokens = generate_tokens({
+            'user_id': user_id,
+            'username': user['username'],
+            'role': user['role']
+        })
+        
+        return jsonify({
+            'access_token': tokens['access_token'],
+            'refresh_token': tokens['refresh_token'],
+            'expires_in': tokens['expires_in']
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Token refresh error: {str(e)}")
+        return jsonify({'message': f'Token refresh failed: {str(e)}'}), 500
+    finally:
+        if 'cursor' in locals() and cursor:
+            cursor.close()
+        if 'conn' in locals() and conn:
             conn.close()
 
 # ---------------- CREATE TASK ----------------

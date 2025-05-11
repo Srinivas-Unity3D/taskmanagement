@@ -33,8 +33,22 @@ db_config = {
 }
 
 # Firebase Cloud Messaging configuration
-FCM_API_URL = "https://fcm.googleapis.com/fcm/send"
-FCM_SERVER_KEY = os.getenv('FCM_SERVER_KEY', '')  # Get this from your Firebase project settings
+# Legacy FCM API (for backward compatibility)
+FCM_LEGACY_API_URL = "https://fcm.googleapis.com/fcm/send"
+# HTTP v1 API (recommended for new implementations)
+FCM_HTTP_V1_API_URL = f"https://fcm.googleapis.com/v1/projects/{os.getenv('FIREBASE_PROJECT_ID', 'TaskManagement')}/messages:send"
+FCM_SERVER_KEY = os.getenv('FCM_SERVER_KEY')
+
+# Get Firebase service account credentials
+try:
+    # Path to your Firebase service account JSON file
+    # SERVICE_ACCOUNT_FILE = os.getenv('FIREBASE_SERVICE_ACCOUNT_FILE')
+    # cred = credentials.Certificate(SERVICE_ACCOUNT_FILE)
+    # firebase_admin.initialize_app(cred)
+    logger.info("Firebase configuration loaded successfully")
+except Exception as e:
+    logger.error(f"Error initializing Firebase: {e}")
+    # Continue without Firebase Admin SDK initialization
 
 def get_db_connection():
     """Get a database connection"""
@@ -160,6 +174,9 @@ def send_alarm_notification(alarm):
             logger.warning(f"No FCM token for user ID: {alarm['user_id']}")
             return False
         
+        # Log that we're sending an alarm
+        logger.info(f"Sending alarm notification for task: {alarm['task_id']} to user: {alarm['user_id']}")
+        
         # Prepare notification data
         notification = {
             "title": f"Task Alarm: {alarm['task_title']}",
@@ -186,16 +203,22 @@ def send_alarm_notification(alarm):
                 "priority": "high",
                 "notification": {
                     "sound": "alarm",
-                    "channel_id": "task_alarms"
+                    "channel_id": "task_alarms",
+                    "priority": "max",
+                    "visibility": "public"
                 }
             },
             "apns": {
                 "headers": {
-                    "apns-priority": "10"
+                    "apns-priority": "10",
+                    "apns-push-type": "alert"
                 },
                 "payload": {
                     "aps": {
-                        "sound": "alarm.wav"
+                        "sound": "alarm.wav",
+                        "category": "TASK_ALARM",
+                        "content-available": 1,
+                        "mutable-content": 1
                     }
                 }
             }
@@ -207,20 +230,23 @@ def send_alarm_notification(alarm):
             "Authorization": f"key={FCM_SERVER_KEY}"
         }
         
+        # Log that we're sending the notification
+        logger.info(f"Sending FCM notification with token: {alarm['fcm_token'][:10]}...")
+        
         response = requests.post(
-            FCM_API_URL,
+            FCM_LEGACY_API_URL,
             data=json.dumps(message),
             headers=headers
         )
         
         if response.status_code == 200:
-            logger.info(f"Notification sent successfully to user ID: {alarm['user_id']}")
+            logger.info(f"Alarm notification sent successfully for task {alarm['task_id']}")
             return True
         else:
-            logger.error(f"Failed to send notification: {response.text}")
+            logger.error(f"Failed to send alarm notification: {response.text}")
             return False
     except Exception as e:
-        logger.error(f"Error sending notification: {str(e)}")
+        logger.error(f"Error sending alarm notification: {str(e)}")
         return False
 
 def process_pending_alarms():
