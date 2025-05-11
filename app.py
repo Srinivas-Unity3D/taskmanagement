@@ -422,9 +422,17 @@ def notify_task_update(task_data, event_type='task_update'):
         # Get sender's role
         sender_role = 'user'
         if updated_by:
-            sender = User.query.filter_by(username=updated_by).first()
-            if sender:
-                sender_role = sender.role
+            try:
+                conn = get_db_connection()
+                cursor = conn.cursor(dictionary=True)
+                cursor.execute("SELECT role FROM users WHERE username = %s", (updated_by,))
+                user = cursor.fetchone()
+                if user:
+                    sender_role = user['role']
+                cursor.close()
+                conn.close()
+            except Exception as e:
+                logger.error(f"Error getting user role: {str(e)}")
         
         # Prepare notification data
         notification_data = {
