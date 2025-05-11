@@ -9,6 +9,8 @@ import datetime
 from dotenv import load_dotenv
 import threading
 import schedule
+import firebase_admin
+from firebase_admin import credentials, messaging
 
 # Load environment variables
 load_dotenv()
@@ -33,22 +35,29 @@ db_config = {
 }
 
 # Firebase Cloud Messaging configuration
-# Legacy FCM API (for backward compatibility)
-FCM_LEGACY_API_URL = "https://fcm.googleapis.com/fcm/send"
-# HTTP v1 API (recommended for new implementations)
-FCM_HTTP_V1_API_URL = f"https://fcm.googleapis.com/v1/projects/{os.getenv('FIREBASE_PROJECT_ID', 'TaskManagement')}/messages:send"
-FCM_SERVER_KEY = os.getenv('FCM_SERVER_KEY')
+FIREBASE_PROJECT_ID = os.getenv('FIREBASE_PROJECT_ID', 'TaskManagement')
 
-# Get Firebase service account credentials
+# Initialize Firebase Admin SDK
 try:
-    # Path to your Firebase service account JSON file
-    # SERVICE_ACCOUNT_FILE = os.getenv('FIREBASE_SERVICE_ACCOUNT_FILE')
-    # cred = credentials.Certificate(SERVICE_ACCOUNT_FILE)
-    # firebase_admin.initialize_app(cred)
-    logger.info("Firebase configuration loaded successfully")
+    # Check if credentials file path is provided
+    creds_file = os.getenv('FIREBASE_CREDENTIALS_FILE')
+    creds_json = os.getenv('FIREBASE_CREDENTIALS')
+    
+    if creds_file and os.path.exists(creds_file):
+        # Initialize with service account file
+        cred = credentials.Certificate(creds_file)
+        firebase_admin.initialize_app(cred)
+        logger.info(f"Firebase initialized with credentials file: {creds_file}")
+    elif creds_json:
+        # Initialize with credentials JSON string
+        cred_dict = json.loads(creds_json)
+        cred = credentials.Certificate(cred_dict)
+        firebase_admin.initialize_app(cred)
+        logger.info("Firebase initialized with credentials from environment variable")
+    else:
+        logger.error("No Firebase credentials found. Notifications will not work.")
 except Exception as e:
     logger.error(f"Error initializing Firebase: {e}")
-    # Continue without Firebase Admin SDK initialization
 
 def get_db_connection():
     """Get a database connection"""
@@ -168,7 +177,7 @@ def update_alarm_status(alarm_id, last_triggered, next_trigger):
         return False
 
 def send_alarm_notification(alarm):
-    """Send FCM notification to user for the alarm"""
+    """Send FCM notification to user for the alarm using Firebase Admin SDK"""
     try:
         if not alarm['fcm_token']:
             logger.warning(f"No FCM token for user ID: {alarm['user_id']}")
@@ -177,74 +186,52 @@ def send_alarm_notification(alarm):
         # Log that we're sending an alarm
         logger.info(f"Sending alarm notification for task: {alarm['task_id']} to user: {alarm['user_id']}")
         
-        # Prepare notification data
-        notification = {
-            "title": f"Task Alarm: {alarm['task_title']}",
-            "body": alarm['task_description'],
-            "sound": "alarm"
-        }
-        
-        # Prepare data payload
-        data = {
-            "type": "task_alarm",
-            "task_id": alarm['task_id'],
-            "alarm_id": alarm['alarm_id'],
-            "title": alarm['task_title'],
-            "click_action": "FLUTTER_NOTIFICATION_CLICK"
-        }
-        
-        # Prepare FCM message
-        message = {
-            "to": alarm['fcm_token'],
-            "notification": notification,
-            "data": data,
-            "priority": "high",
-            "android": {
-                "priority": "high",
-                "notification": {
-                    "sound": "alarm",
-                    "channel_id": "task_alarms",
-                    "priority": "max",
-                    "visibility": "public"
-                }
-            },
-            "apns": {
-                "headers": {
-                    "apns-priority": "10",
-                    "apns-push-type": "alert"
+        # Use the messaging module from Firebase Admin SDK
+        try:
+            # Create the notification message
+            message = messaging.Message(
+                notification=messaging.Notification(
+                    title=f"Task Alarm: {alarm['task_title']}",
+                    body=alarm['task_description'] or "Time to check your task!"
+                ),
+                data={
+                    "type": "task_alarm",
+                    "task_id": alarm['task_id'],
+                    "alarm_id": alarm['alarm_id'],
+                    "title": alarm['task_title'],
+                    "click_action": "FLUTTER_NOTIFICATION_CLICK"
                 },
-                "payload": {
-                    "aps": {
-                        "sound": "alarm.wav",
-                        "category": "TASK_ALARM",
-                        "content-available": 1,
-                        "mutable-content": 1
-                    }
-                }
-            }
-        }
-        
-        # Send FCM request
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"key={FCM_SERVER_KEY}"
-        }
-        
-        # Log that we're sending the notification
-        logger.info(f"Sending FCM notification with token: {alarm['fcm_token'][:10]}...")
-        
-        response = requests.post(
-            FCM_LEGACY_API_URL,
-            data=json.dumps(message),
-            headers=headers
-        )
-        
-        if response.status_code == 200:
-            logger.info(f"Alarm notification sent successfully for task {alarm['task_id']}")
+                android=messaging.AndroidConfig(
+                    priority='high',
+                    notification=messaging.AndroidNotification(
+                        sound='alarm',
+                        channel_id='task_alarms',
+                        priority='max',
+                        visibility='public'
+                    )
+                ),
+                apns=messaging.APNSConfig(
+                    payload=messaging.APNSPayload(
+                        aps=messaging.Aps(
+                            sound='alarm.wav',
+                            category='TASK_ALARM',
+                            content_available=True,
+                            mutable_content=True
+                        )
+                    ),
+                    headers={'apns-priority': '10'}
+                ),
+                token=alarm['fcm_token']
+            )
+            
+            # Send the message
+            response = messaging.send(message)
+            logger.info(f"Successfully sent alarm notification: {response}")
             return True
-        else:
-            logger.error(f"Failed to send alarm notification: {response.text}")
+        except Exception as e:
+            logger.error(f"Error sending notification with Firebase Admin SDK: {e}")
             return False
+            
     except Exception as e:
         logger.error(f"Error sending alarm notification: {str(e)}")
         return False

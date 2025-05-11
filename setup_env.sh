@@ -13,7 +13,8 @@ DB_NAME=task_db
 
 # Firebase Configuration
 FIREBASE_PROJECT_ID=TaskManagement
-FCM_SERVER_KEY=REPLACE_THIS_WITH_YOUR_ACTUAL_SERVER_KEY
+FIREBASE_CREDENTIALS_FILE=/path/to/your/firebase-credentials.json
+# The FIREBASE_CREDENTIALS will be populated by setup_firebase.sh
 
 # Server Settings
 PORT=5001
@@ -39,7 +40,8 @@ DB_NAME=task_db
 
 # Firebase Configuration
 FIREBASE_PROJECT_ID=TaskManagement
-FCM_SERVER_KEY=REPLACE_THIS_WITH_YOUR_ACTUAL_SERVER_KEY
+FIREBASE_CREDENTIALS_FILE=/path/to/your/firebase-credentials.json
+# The FIREBASE_CREDENTIALS will be populated by setup_firebase.sh
 
 # Server Settings
 PORT=5001
@@ -51,5 +53,5 @@ JWT_ACCESS_TOKEN_EXPIRES=30d
 EOL
 
 echo "Environment files created successfully!"
-echo "IMPORTANT: Replace the FCM_SERVER_KEY with your actual Firebase Server Key"
-echo "Get your server key from Firebase Console > Project Settings > Cloud Messaging > Server key" 
+echo "IMPORTANT: Run setup_firebase.sh to configure Firebase credentials"
+echo "Get your Firebase credentials from Firebase Console > Project Settings > Service accounts > Generate new private key" 
