@@ -2691,42 +2691,61 @@ def test_alarm_trigger():
                 'message': f'User {username} does not have a registered FCM token'
             }), 400
             
-        # Prepare notification data
+        # Prepare notification data with special flags for immediate alarm
         notification = {
-            "title": f"Task Alarm: {result['title']}",
-            "body": result['description'] or "Test alarm notification",
+            "title": f"🔔 IMMEDIATE ALARM TEST: {result['title']}",
+            "body": result['description'] or "Immediate alarm test - should play sound now!",
             "sound": "alarm"
         }
         
-        # Prepare data payload
+        # Prepare data payload with immediate flag
         data = {
             "type": "task_alarm",
             "task_id": result['task_id'],
             "alarm_id": f"test_{uuid.uuid4()}",
             "title": result['title'],
-            "click_action": "FLUTTER_NOTIFICATION_CLICK"
+            "click_action": "FLUTTER_NOTIFICATION_CLICK",
+            "immediate_alarm": "true",  # Special flag to indicate immediate alarm
+            "play_sound_now": "true",   # Flag to trigger immediate sound playback
+            "urgent": "true",           # Flag to indicate urgency
+            "test_timestamp": str(int(time.time())),  # Add timestamp for testing
+            "alarm_mode": "immediate"   # Set alarm mode to immediate
         }
         
-        # Prepare FCM message
+        # Prepare FCM message with highest priority settings
         message = {
             "to": result['fcm_token'],
             "notification": notification,
             "data": data,
             "priority": "high",
+            "time_to_live": 0,  # Expire immediately if not delivered
             "android": {
                 "priority": "high",
+                "ttl": "0s",   # Zero TTL for immediate delivery
                 "notification": {
                     "sound": "alarm",
-                    "channel_id": "task_alarms"
+                    "channel_id": "task_alarms",
+                    "priority": "max",
+                    "visibility": "public",
+                    "default_sound": False,
+                    "default_vibrate_timings": False,
+                    "vibrate_timings": ["0.1s", "0.1s", "0.1s", "0.1s", "0.1s"],
+                    "notification_count": 1
                 }
             },
             "apns": {
                 "headers": {
-                    "apns-priority": "10"
+                    "apns-priority": "10",  # Highest priority
+                    "apns-push-type": "alert"
                 },
                 "payload": {
                     "aps": {
-                        "sound": "alarm.wav"
+                        "sound": "alarm.wav",
+                        "content-available": 1,  # Trigger silent push to wake app
+                        "mutable-content": 1,    # Allow app to modify notification
+                        "badge": 1,
+                        "priority": 10,
+                        "interruption-level": "critical"  # Highest interruption level
                     }
                 }
             }
@@ -2738,6 +2757,10 @@ def test_alarm_trigger():
             "Authorization": f"key={FCM_SERVER_KEY}"
         }
         
+        logger.info(f"Sending immediate alarm test notification to {username}")
+        logger.info(f"FCM token: {result['fcm_token'][:20]}...")
+        logger.info(f"Message data: {data}")
+        
         response = requests.post(
             FCM_API_URL,
             data=json.dumps(message),
@@ -2745,12 +2768,14 @@ def test_alarm_trigger():
         )
         
         if response.status_code == 200:
+            logger.info(f"Immediate alarm test sent successfully to {username}")
             return jsonify({
                 'success': True,
-                'message': f'Test alarm sent successfully to {username}',
+                'message': f'Immediate alarm test sent successfully to {username}',
                 'fcm_response': json.loads(response.text)
             })
         else:
+            logger.error(f"Failed to send immediate alarm test: {response.text}")
             return jsonify({
                 'success': False,
                 'message': f'Failed to send FCM notification: {response.text}'
