@@ -17,6 +17,7 @@ from firebase_admin import messaging, initialize_app, credentials
 import time
 import threading
 import pytz  # Add this import at the top
+import requests
 
 # Setup logging
 logging.basicConfig(
@@ -2644,6 +2645,122 @@ def download_audio_note(task_id, audio_id):
         return jsonify({
             'success': False,
             'message': f"Error downloading audio note: {str(e)}"
+        }), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+@app.route('/alarms/test_trigger', methods=['GET'])
+def test_alarm_trigger():
+    """Test endpoint to manually trigger an alarm for a user's device"""
+    try:
+        # Get task_id and username from query parameters
+        task_id = request.args.get('task_id')
+        username = request.args.get('username')
+        
+        if not task_id or not username:
+            return jsonify({
+                'success': False,
+                'message': 'Missing required parameters: task_id and username'
+            }), 400
+            
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(f"USE {db_config['database']}")
+        
+        # Get task and user details
+        cursor.execute("""
+            SELECT t.task_id, t.title, t.description, u.user_id, u.fcm_token
+            FROM tasks t
+            JOIN users u ON t.assigned_to = u.username
+            WHERE t.task_id = %s AND u.username = %s
+        """, (task_id, username))
+        
+        result = cursor.fetchone()
+        if not result:
+            return jsonify({
+                'success': False,
+                'message': f'Task not found or user {username} is not assigned to this task'
+            }), 404
+            
+        if not result['fcm_token']:
+            return jsonify({
+                'success': False,
+                'message': f'User {username} does not have a registered FCM token'
+            }), 400
+            
+        # Prepare notification data
+        notification = {
+            "title": f"Task Alarm: {result['title']}",
+            "body": result['description'] or "Test alarm notification",
+            "sound": "alarm"
+        }
+        
+        # Prepare data payload
+        data = {
+            "type": "task_alarm",
+            "task_id": result['task_id'],
+            "alarm_id": f"test_{uuid.uuid4()}",
+            "title": result['title'],
+            "click_action": "FLUTTER_NOTIFICATION_CLICK"
+        }
+        
+        # Prepare FCM message
+        message = {
+            "to": result['fcm_token'],
+            "notification": notification,
+            "data": data,
+            "priority": "high",
+            "android": {
+                "priority": "high",
+                "notification": {
+                    "sound": "alarm",
+                    "channel_id": "task_alarms"
+                }
+            },
+            "apns": {
+                "headers": {
+                    "apns-priority": "10"
+                },
+                "payload": {
+                    "aps": {
+                        "sound": "alarm.wav"
+                    }
+                }
+            }
+        }
+        
+        # Send FCM request
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"key={FCM_SERVER_KEY}"
+        }
+        
+        response = requests.post(
+            FCM_API_URL,
+            data=json.dumps(message),
+            headers=headers
+        )
+        
+        if response.status_code == 200:
+            return jsonify({
+                'success': True,
+                'message': f'Test alarm sent successfully to {username}',
+                'fcm_response': json.loads(response.text)
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'message': f'Failed to send FCM notification: {response.text}'
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error in test_alarm_trigger: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': str(e)
         }), 500
     finally:
         if cursor:
