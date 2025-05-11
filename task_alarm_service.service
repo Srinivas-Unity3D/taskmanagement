@@ -1,0 +1,19 @@
+[Unit]
+Description=Task Alarm Service
+After=network.target mysql.service
+Wants=mysql.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/var/task_management_dev
+ExecStart=/usr/bin/python3 /var/task_management_dev/task_alarm_service.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=task_alarm_service
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target 
