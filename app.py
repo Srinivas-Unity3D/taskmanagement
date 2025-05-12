@@ -96,14 +96,13 @@ app.config['ENV'] = os.getenv('FLASK_ENV', 'production')
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key')
 
 # JWT Configuration
-app.config['JWT_SECRET_KEY'] = Config.JWT_SECRET_KEY
-app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=Config.JWT_ACCESS_TOKEN_EXPIRES)
-app.config['JWT_REFRESH_TOKEN_EXPIRES'] = timedelta(days=Config.JWT_REFRESH_TOKEN_EXPIRES)
+app.config['JWT_SECRET_KEY'] = Config.SECRET_KEY  # Use SECRET_KEY instead of JWT_SECRET_KEY
+# Use sensible defaults if the specific JWT config values don't exist
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=24)  # Default 24 hours
+app.config['JWT_REFRESH_TOKEN_EXPIRES'] = timedelta(days=30)  # Default 30 days
 app.config['JWT_TOKEN_LOCATION'] = ['headers']
 app.config['JWT_HEADER_NAME'] = 'Authorization'
 app.config['JWT_HEADER_TYPE'] = 'Bearer'
-# Remove the JWT_EXEMPT_CONTENT_TYPE line that's causing the crash
-# app.config['JWT_EXEMPT_CONTENT_TYPE'] = ['multipart/form-data']
 
 # Initialize JWT
 jwt = JWTManager(app)
