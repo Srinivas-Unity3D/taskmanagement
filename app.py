@@ -398,6 +398,9 @@ socketio = SocketIO(
 def validate_request():
     if request.path.startswith('/socket.io/'):
         return  # Skip validation for socket.io requests
+    # Allow multipart/form-data for file uploads
+    if request.path.startswith('/upload'):
+        return
     # Validate content type for non-WebSocket requests
     if request.method in ['POST', 'PUT']:
         if not request.is_json and request.headers.get('Content-Type') != 'application/json':
@@ -2557,10 +2560,23 @@ def get_task(task_id):
         if not task:
             return jsonify({'success': False, 'message': 'Task not found'}), 404
 
+        # Convert any datetime/timedelta fields to string
+        for k, v in task.items():
+            if isinstance(v, (datetime,)):
+                task[k] = v.isoformat()
+            elif isinstance(v, timedelta):
+                task[k] = str(v)
+
         # Get alarm settings
         cursor.execute("SELECT start_date, start_time, frequency FROM task_alarms WHERE task_id = %s", (task_id,))
         alarm = cursor.fetchone()
         if alarm:
+            # Convert any datetime/timedelta fields in alarm
+            for k, v in alarm.items():
+                if isinstance(v, (datetime,)):
+                    alarm[k] = v.isoformat()
+                elif isinstance(v, timedelta):
+                    alarm[k] = str(v)
             task['alarm_settings'] = alarm
         else:
             task['alarm_settings'] = None
