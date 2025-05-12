@@ -809,38 +809,26 @@ def login():
         # Generate new tokens
         access_token, refresh_token = generate_tokens(user)
         
-        # Calculate token expiry times
-        access_token_expires = datetime.utcnow() + app.config['JWT_ACCESS_TOKEN_EXPIRES']
-        refresh_token_expires = datetime.utcnow() + timedelta(days=30)  # 30 days for refresh token
+        # Calculate token expiry time
+        token_expires_at = datetime.utcnow() + app.config['JWT_ACCESS_TOKEN_EXPIRES']
 
-        # Store tokens in database
-        token_id = str(uuid.uuid4())
+        # Update user with new tokens
         cursor.execute("""
-            INSERT INTO user_tokens (
-                id, user_id, access_token, refresh_token, 
-                access_token_expires_at, refresh_token_expires_at
-            ) VALUES (%s, %s, %s, %s, %s, %s)
+            UPDATE users 
+            SET access_token = %s,
+                refresh_token = %s,
+                token_expires_at = %s,
+                fcm_token = COALESCE(%s, fcm_token)
+            WHERE username = %s
         """, (
-            token_id, user['user_id'], access_token, refresh_token,
-            access_token_expires, refresh_token_expires
+            access_token,
+            refresh_token,
+            token_expires_at,
+            fcm_token if fcm_token else None,
+            username
         ))
 
-        # Revoke old tokens for this user
-        cursor.execute("""
-            UPDATE user_tokens 
-            SET is_revoked = TRUE 
-            WHERE user_id = %s AND id != %s
-        """, (user['user_id'], token_id))
-
         conn.commit()
-
-        # Update FCM token if provided
-        if fcm_token:
-            cursor.execute(
-                "UPDATE users SET fcm_token = %s WHERE username = %s",
-                (fcm_token, username)
-            )
-            conn.commit()
 
         return jsonify({
             'user_id': user['user_id'],
@@ -864,56 +852,36 @@ def refresh_token():
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
 
-        # Get user details
-        cursor.execute(
-            "SELECT user_id, username, role FROM users WHERE username = %s",
-            (current_user,)
-        )
+        # Get user details and verify refresh token
+        cursor.execute("""
+            SELECT user_id, username, role, refresh_token 
+            FROM users 
+            WHERE username = %s AND refresh_token IS NOT NULL
+            AND token_expires_at > NOW()
+        """, (current_user,))
+        
         user = cursor.fetchone()
-
         if not user:
-            return jsonify({'message': 'User not found'}), 404
-
-        # Check if the refresh token is valid and not revoked
-        auth_header = request.headers.get('Authorization')
-        if auth_header:
-            refresh_token = auth_header.split(' ')[1]
-            cursor.execute("""
-                SELECT id FROM user_tokens 
-                WHERE user_id = %s 
-                AND refresh_token = %s 
-                AND is_revoked = FALSE 
-                AND refresh_token_expires_at > NOW()
-            """, (user['user_id'], refresh_token))
-            
-            token_record = cursor.fetchone()
-            if not token_record:
-                return jsonify({'message': 'Invalid or expired refresh token'}), 401
-
-            # Revoke the old token
-            cursor.execute("""
-                UPDATE user_tokens 
-                SET is_revoked = TRUE 
-                WHERE id = %s
-            """, (token_record['id'],))
+            return jsonify({'message': 'Invalid or expired refresh token'}), 401
 
         # Generate new tokens
         new_access_token, new_refresh_token = generate_tokens(user)
         
-        # Calculate new expiry times
-        access_token_expires = datetime.utcnow() + app.config['JWT_ACCESS_TOKEN_EXPIRES']
-        refresh_token_expires = datetime.utcnow() + timedelta(days=30)
+        # Calculate new expiry time
+        token_expires_at = datetime.utcnow() + app.config['JWT_ACCESS_TOKEN_EXPIRES']
 
-        # Store new tokens
-        token_id = str(uuid.uuid4())
+        # Update user with new tokens
         cursor.execute("""
-            INSERT INTO user_tokens (
-                id, user_id, access_token, refresh_token, 
-                access_token_expires_at, refresh_token_expires_at
-            ) VALUES (%s, %s, %s, %s, %s, %s)
+            UPDATE users 
+            SET access_token = %s,
+                refresh_token = %s,
+                token_expires_at = %s
+            WHERE username = %s
         """, (
-            token_id, user['user_id'], new_access_token, new_refresh_token,
-            access_token_expires, refresh_token_expires
+            new_access_token,
+            new_refresh_token,
+            token_expires_at,
+            current_user
         ))
 
         conn.commit()
@@ -936,22 +904,14 @@ def logout():
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
 
-        # Get user details
-        cursor.execute(
-            "SELECT user_id FROM users WHERE username = %s",
-            (current_user,)
-        )
-        user = cursor.fetchone()
-
-        if not user:
-            return jsonify({'message': 'User not found'}), 404
-
-        # Revoke all tokens for the user
+        # Clear tokens for the user
         cursor.execute("""
-            UPDATE user_tokens 
-            SET is_revoked = TRUE 
-            WHERE user_id = %s
-        """, (user['user_id'],))
+            UPDATE users 
+            SET access_token = NULL,
+                refresh_token = NULL,
+                token_expires_at = NULL
+            WHERE username = %s
+        """, (current_user,))
 
         conn.commit()
 
