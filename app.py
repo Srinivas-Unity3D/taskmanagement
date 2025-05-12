@@ -3597,3 +3597,37 @@ if __name__ == '__main__':
     print(f'Server starting on http://0.0.0.0:{port} in {env} mode')
     socketio.run(app, host='0.0.0.0', port=port, debug=(env == 'development')) 
 
+@app.route('/tasks/<task_id>', methods=['GET'])
+def get_task(task_id):
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(f"USE {db_config['database']}")
+        # Get task details
+        cursor.execute("SELECT * FROM tasks WHERE task_id = %s", (task_id,))
+        task = cursor.fetchone()
+        if not task:
+            return jsonify({'success': False, 'message': 'Task not found'}), 404
+
+        # Get alarm settings
+        cursor.execute("SELECT start_date, start_time, frequency FROM task_alarms WHERE task_id = %s", (task_id,))
+        alarm = cursor.fetchone()
+        if alarm:
+            task['alarm_settings'] = alarm
+        else:
+            task['alarm_settings'] = None
+
+        return jsonify({'success': True, 'task': task}), 200
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        logger.error(f"Error fetching task: {str(e)}")
+        return jsonify({'success': False, 'message': f"Error fetching task: {str(e)}"}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
