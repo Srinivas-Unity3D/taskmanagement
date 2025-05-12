@@ -96,13 +96,22 @@ app.config['ENV'] = os.getenv('FLASK_ENV', 'production')
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key')
 
 # JWT Configuration
-app.config['JWT_SECRET_KEY'] = Config.SECRET_KEY  # Use SECRET_KEY instead of JWT_SECRET_KEY
-# Use sensible defaults if the specific JWT config values don't exist
+# Use environment variables or fallback to old JWT settings
+jwt_secret = os.getenv('JWT_SECRET_KEY', 'your_secret_key_here')
+app.config['JWT_SECRET_KEY'] = jwt_secret
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=24)  # Default 24 hours
 app.config['JWT_REFRESH_TOKEN_EXPIRES'] = timedelta(days=30)  # Default 30 days
 app.config['JWT_TOKEN_LOCATION'] = ['headers']
 app.config['JWT_HEADER_NAME'] = 'Authorization'
 app.config['JWT_HEADER_TYPE'] = 'Bearer'
+app.config['JWT_IDENTITY_CLAIM'] = 'sub'
+# For debugging only - remove in production
+app.config['JWT_DECODE_ALGORITHMS'] = ['HS256']
+app.config['PROPAGATE_EXCEPTIONS'] = True
+
+# Print JWT configuration for debugging
+logger.info(f"JWT_SECRET_KEY: {'*****' + jwt_secret[-5:] if len(jwt_secret) > 5 else '*****'}")
+logger.info(f"JWT_ACCESS_TOKEN_EXPIRES: {app.config['JWT_ACCESS_TOKEN_EXPIRES']}")
 
 # Initialize JWT
 jwt = JWTManager(app)
@@ -2437,22 +2446,33 @@ def update_fcm_token():
 
 # ---------------- UPLOAD FILE ----------------
 @app.route('/upload', methods=['POST'])
-# Temporarily remove the JWT requirement until we can fix the multipart issue
-# @jwt_required()
 def upload_file():
     try:
+        # Accept any content type for uploads
+        if request.content_type and 'multipart/form-data' in request.content_type:
+            logger.info("Received multipart/form-data upload")
+        else:
+            logger.warning(f"Received upload with content type: {request.content_type}")
+        
         # Try to get user identity if token is provided
         current_user = None
         auth_header = request.headers.get('Authorization', '')
         if auth_header.startswith('Bearer '):
             try:
-                from flask_jwt_extended.view_decorators import _decode_jwt_from_request
-                jwt_data = _decode_jwt_from_request(request_type="access")
-                current_user = jwt_data["sub"]
+                token = auth_header.split(' ')[1]
+                logger.debug(f"Received token: {token[:10]}...")
+                # Manually decode token for debugging
+                try:
+                    import jwt as pyjwt
+                    decoded = pyjwt.decode(token, jwt_secret, algorithms=['HS256'])
+                    logger.debug(f"Decoded token: {decoded}")
+                    current_user = decoded.get('sub')
+                except Exception as e:
+                    logger.warning(f"Manual token decode failed: {e}")
             except Exception as e:
-                logger.warning(f"Error extracting JWT identity: {str(e)}")
+                logger.warning(f"Error extracting JWT identity: {e}")
         
-        logger.info(f"File upload by user: {current_user or 'unknown'}")
+        logger.info(f"File upload by user: {current_user or 'anonymous'}")
         
         # Log request details for debugging
         logger.debug(f"Request headers: {dict(request.headers)}")
