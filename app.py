@@ -2,9 +2,10 @@
 import eventlet
 eventlet.monkey_patch()
 
-from flask import Flask, request, jsonify, send_file, Response, send_from_directory
+from flask import Flask, request, jsonify, send_file, Response, send_from_directory, current_app, g
 from flask_cors import CORS
-from flask_jwt_extended import JWTManager, get_jwt_identity, jwt_required
+from flask_jwt_extended import JWTManager, get_jwt_identity, jwt_required, create_access_token, create_refresh_token
+from flask_socketio import SocketIO, join_room, emit, disconnect
 import mysql.connector
 from mysql.connector import pooling
 import uuid
@@ -28,16 +29,15 @@ import sys
 import hashlib
 from config.config import Config
 import firebase_admin
+from functools import wraps
+import schedule
 
 def verify_password(provided_password, stored_password):
-    """Verify a password against stored password"""
-    try:
-        # For now, comparing plain text passwords since that's how they're stored
-        # TODO: Implement proper password hashing in the future
-        return provided_password == stored_password
-    except Exception as e:
-        logger.error(f"Error verifying password: {str(e)}")
+    """Verify the hashed password."""
+    if not provided_password or not stored_password:
         return False
+    # Use Werkzeug's check_password_hash function
+    return check_password_hash(stored_password, provided_password)
 
 # Setup logging
 logging.basicConfig(
@@ -97,16 +97,14 @@ app.config['ENV'] = os.getenv('FLASK_ENV', 'production')
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key')
 
 # JWT Configuration
-jwt_expires_env = os.getenv('JWT_ACCESS_TOKEN_EXPIRES', '7')
-if jwt_expires_env.endswith('d'):
-    days = int(jwt_expires_env[:-1])
-else:
-    days = int(jwt_expires_env)
-app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=days)
-app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'your-jwt-secret-key')
+app.config['JWT_SECRET_KEY'] = Config.JWT_SECRET_KEY
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=Config.JWT_ACCESS_TOKEN_EXPIRES)
+app.config['JWT_REFRESH_TOKEN_EXPIRES'] = timedelta(days=Config.JWT_REFRESH_TOKEN_EXPIRES)
 app.config['JWT_TOKEN_LOCATION'] = ['headers']
 app.config['JWT_HEADER_NAME'] = 'Authorization'
 app.config['JWT_HEADER_TYPE'] = 'Bearer'
+# Add this to exempt multipart/form-data from content type check
+app.config['JWT_EXEMPT_CONTENT_TYPE'] = ['multipart/form-data'] 
 
 # Initialize JWT
 jwt = JWTManager(app)
@@ -2444,18 +2442,29 @@ def update_fcm_token():
 @jwt_required()
 def upload_file():
     try:
-        # Get user identity from token
+        # Get user identity using standard method
         current_user = get_jwt_identity()
         logger.info(f"File upload by user: {current_user}")
         
+        # Log request details for debugging
+        logger.debug(f"Request headers: {dict(request.headers)}")
+        logger.debug(f"Request content type: {request.content_type}")
+        logger.debug(f"Request files: {request.files.keys()}")
+        logger.debug(f"Request form: {request.form.keys()}")
+        
         if 'files[]' not in request.files:
+            logger.warning("No files[] in request.files")
             return jsonify({
                 'success': False,
                 'message': 'No files provided'
             }), 400
         
         files = request.files.getlist('files[]')
+        logger.debug(f"Number of files: {len(files)}")
+        
         file_type = request.form.get('type', 'attachment')
+        logger.debug(f"File type: {file_type}")
+        
         uploaded_files = []
         
         # Define allowed extensions
@@ -2463,11 +2472,15 @@ def upload_file():
         
         for file in files:
             if file.filename == '':
+                logger.warning("Empty filename in request")
                 continue
                 
             # Check file extension
             extension = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else ''
+            logger.debug(f"File extension: {extension}")
+            
             if extension not in allowed_extensions:
+                logger.warning(f"Extension {extension} not in allowed extensions: {allowed_extensions}")
                 return jsonify({
                     'success': False,
                     'message': f'File type .{extension} is not allowed'
@@ -2478,10 +2491,12 @@ def upload_file():
             
             # Determine upload folder based on type
             upload_folder = AUDIO_FOLDER if file_type == 'audio' else ATTACHMENTS_FOLDER
+            logger.debug(f"Upload folder: {upload_folder}")
             
             # Ensure filename is secure and unique
             filename = secure_filename(f"{file_id}_{file.filename}")
             file_path = os.path.join(upload_folder, filename)
+            logger.debug(f"File will be saved to: {file_path}")
             
             # Create directory if it doesn't exist
             os.makedirs(upload_folder, exist_ok=True)
@@ -2500,6 +2515,7 @@ def upload_file():
             
             # Get file size
             file_size = os.path.getsize(file_path)
+            logger.debug(f"File saved successfully. Size: {file_size} bytes")
             
             uploaded_files.append({
                 'file_id': file_id,
@@ -2509,13 +2525,14 @@ def upload_file():
                 'file_size': file_size
             })
         
+        logger.info(f"Successfully uploaded {len(uploaded_files)} files")
         return jsonify({
             'success': True,
             'files': uploaded_files
         }), 200
         
     except Exception as e:
-        logger.error(f"Error uploading files: {str(e)}")
+        logger.error(f"Error uploading files: {str(e)}", exc_info=True)  # Include stack trace
         return jsonify({
             'success': False,
             'message': f"Error uploading files: {str(e)}"
@@ -3163,16 +3180,6 @@ def test_alarm_trigger():
             cursor.close()
         if conn:
             conn.close()
-
-def verify_password(provided_password, stored_password):
-    """Verify a password against stored password"""
-    try:
-        # For now, comparing plain text passwords since that's how they're stored
-        # TODO: Implement proper password hashing in the future
-        return provided_password == stored_password
-    except Exception as e:
-        logger.error(f"Error verifying password: {str(e)}")
-        return False
 
 # ---------------- MAIN ----------------
 if __name__ == '__main__':
