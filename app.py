@@ -2461,25 +2461,34 @@ def upload_file():
             logger.debug(f"Request files: {request.files.keys()}")
             logger.debug(f"Request form: {request.form.keys()}")
             
-            if 'files[]' not in request.files:
-                logger.warning("No files[] in request.files")
+            # Support both single file upload ('file') and multiple files ('files[]')
+            files_to_process = []
+            if 'file' in request.files:
+                # Single file upload format
+                files_to_process.append(request.files['file'])
+                logger.debug("Processing single file upload with key 'file'")
+            elif 'files[]' in request.files:
+                # Multiple files upload format (legacy)
+                files_to_process.extend(request.files.getlist('files[]'))
+                logger.debug(f"Processing multiple files upload with key 'files[]', count: {len(files_to_process)}")
+            else:
+                logger.warning("No valid file field found in request")
                 return jsonify({
                     'success': False,
                     'message': 'No files provided'
                 }), 400
             
-            files = request.files.getlist('files[]')
-            logger.debug(f"Number of files: {len(files)}")
+            logger.debug(f"Number of files to process: {len(files_to_process)}")
             
             file_type = request.form.get('type', 'attachment')
             logger.debug(f"File type: {file_type}")
             
             uploaded_files = []
             
-            # Define allowed extensions
-            allowed_extensions = ALLOWED_AUDIO_EXTENSIONS if file_type == 'audio' else {'pdf', 'doc', 'docx', 'xls', 'xlsx', 'txt', 'jpg', 'jpeg', 'png'}
+            # Define allowed extensions - accept all file types for now
+            allowed_extensions = ALLOWED_AUDIO_EXTENSIONS if file_type == 'audio' else {'pdf', 'doc', 'docx', 'xls', 'xlsx', 'txt', 'jpg', 'jpeg', 'png', 'mp3', 'wav'}
             
-            for file in files:
+            for file in files_to_process:
                 if file.filename == '':
                     logger.warning("Empty filename in request")
                     continue
@@ -2522,19 +2531,36 @@ def upload_file():
                 # Get relative path for database
                 relative_path = os.path.join('uploads', 'audio' if file_type == 'audio' else 'attachments', filename)
                 
+                # Create URL path for the file
+                url_path = '/' + relative_path.replace('\\', '/')
+                
                 # Get file size
                 file_size = os.path.getsize(file_path)
                 logger.debug(f"File saved successfully. Size: {file_size} bytes")
                 
-                uploaded_files.append({
+                file_info = {
                     'file_id': file_id,
                     'file_path': relative_path,
                     'file_name': file.filename,
                     'file_type': extension,
-                    'file_size': file_size
-                })
+                    'file_size': file_size,
+                    'file_url': url_path  # Add URL for direct access
+                }
+                
+                uploaded_files.append(file_info)
             
             logger.info(f"Successfully uploaded {len(uploaded_files)} files")
+            
+            # For single file upload, return a simpler response
+            if len(uploaded_files) == 1 and 'file' in request.files:
+                return jsonify({
+                    'success': True,
+                    'file_url': uploaded_files[0]['file_url'],
+                    'file_id': uploaded_files[0]['file_id'],
+                    'file_name': uploaded_files[0]['file_name']
+                }), 200
+            
+            # For multiple files, return the full list
             return jsonify({
                 'success': True,
                 'files': uploaded_files
