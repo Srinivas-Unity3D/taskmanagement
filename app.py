@@ -813,7 +813,7 @@ def login():
 
         # Get user details
         cursor.execute(
-            "SELECT user_id, username, password, role FROM users WHERE username = %s",
+            "SELECT user_id, username, password, role, email, phone FROM users WHERE username = %s",
             (username,)
         )
         user = cursor.fetchone()
@@ -836,7 +836,20 @@ def login():
 
         # Generate tokens
         tokens = generate_tokens(user)
-        return jsonify(tokens), 200
+        
+        # Combine user info with tokens
+        response = {
+            'user_id': user['user_id'],
+            'username': user['username'],
+            'email': user['email'],
+            'phone': user['phone'],
+            'role': user['role'],
+            'access_token': tokens['access_token'],
+            'refresh_token': tokens['refresh_token'],
+            'expires_in': tokens['expires_in']
+        }
+        
+        return jsonify(response), 200
 
     except Exception as e:
         logger.error(f"Login error: {str(e)}")
@@ -2996,6 +3009,16 @@ def test_alarm_trigger():
         if conn:
             conn.close()
 
+def verify_password(provided_password, stored_password):
+    """Verify a password against stored password"""
+    try:
+        # For now, comparing plain text passwords since that's how they're stored
+        # TODO: Implement proper password hashing in the future
+        return provided_password == stored_password
+    except Exception as e:
+        logger.error(f"Error verifying password: {str(e)}")
+        return False
+
 # ---------------- MAIN ----------------
 if __name__ == '__main__':
     # Initialize the application
@@ -3052,12 +3075,3 @@ if __name__ == '__main__':
     print(f'Server starting on http://0.0.0.0:{port} in {env} mode')
     socketio.run(app, host='0.0.0.0', port=port, debug=(env == 'development')) 
 
-def verify_password(provided_password, stored_password):
-    """Verify a password against stored password"""
-    try:
-        # For now, comparing plain text passwords since that's how they're stored
-        # TODO: Implement proper password hashing in the future
-        return provided_password == stored_password
-    except Exception as e:
-        logger.error(f"Error verifying password: {str(e)}")
-        return False
