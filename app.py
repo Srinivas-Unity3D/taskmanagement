@@ -404,9 +404,9 @@ def handle_connect():
         return False
 
 @socketio.on('disconnect')
-def handle_disconnect():
+def handle_disconnect(sid=None):
     try:
-        sid = request.sid
+        sid = sid or request.sid
         if not sid:
             logger.error("Invalid disconnect - no SID")
             return
