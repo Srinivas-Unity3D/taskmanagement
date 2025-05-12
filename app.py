@@ -2451,673 +2451,97 @@ def upload_file():
         # Accept any content type for uploads
         if request.content_type and 'multipart/form-data' in request.content_type:
             logger.info("Received multipart/form-data upload")
-        else:
-            logger.warning(f"Received upload with content type: {request.content_type}")
-        
-        # Try to get user identity if token is provided
-        current_user = None
-        auth_header = request.headers.get('Authorization', '')
-        if auth_header.startswith('Bearer '):
-            try:
-                token = auth_header.split(' ')[1]
-                logger.debug(f"Received token: {token[:10]}...")
-                # Manually decode token for debugging
-                try:
-                    import jwt as pyjwt
-                    decoded = pyjwt.decode(token, jwt_secret, algorithms=['HS256'])
-                    logger.debug(f"Decoded token: {decoded}")
-                    current_user = decoded.get('sub')
-                except Exception as e:
-                    logger.warning(f"Manual token decode failed: {e}")
-            except Exception as e:
-                logger.warning(f"Error extracting JWT identity: {e}")
-        
-        logger.info(f"File upload by user: {current_user or 'anonymous'}")
-        
-        # Rest of the function remains unchanged...
-
-# Serve audio files from uploads/audio
-@app.route('/uploads/audio/<path:filename>')
-def serve_audio(filename):
-    try:
-        # Get the absolute path to the audio file
-        audio_path = os.path.join(UPLOAD_FOLDER, 'audio', filename)
-        
-        # Check if file exists
-        if not os.path.exists(audio_path):
-            logger.error(f"Audio file not found: {audio_path}")
-            return jsonify({
-                'success': False,
-                'message': 'Audio file not found'
-            }), 404
             
-        # Determine the correct mimetype based on file extension
-        extension = filename.rsplit('.', 1)[1].lower() if '.' in filename else ''
-        if extension == 'wav':
-            mimetype = 'audio/wav'
-        elif extension == 'mp3':
-            mimetype = 'audio/mpeg'
-        elif extension == 'm4a':
-            mimetype = 'audio/mp4'
-        elif extension == 'ogg':
-            mimetype = 'audio/ogg'
-        else:
-            mimetype = 'application/octet-stream'
+            # Log request details for debugging
+            logger.debug(f"Request headers: {dict(request.headers)}")
+            logger.debug(f"Request content type: {request.content_type}")
+            logger.debug(f"Request files: {request.files.keys()}")
+            logger.debug(f"Request form: {request.form.keys()}")
             
-        # Send the file with proper mimetype
-        return send_file(
-            audio_path,
-            mimetype=mimetype,
-            as_attachment=False,
-            download_name=filename
-        )
-    except Exception as e:
-        logger.error(f"Error serving audio file: {str(e)}")
-        return jsonify({
-            'success': False,
-            'message': f"Error serving audio file: {str(e)}"
-        }), 500
-
-# ---------------- MARK ALL NOTIFICATIONS AS READ ----------------
-@app.route('/notifications/accept_all', methods=['POST'])
-def accept_all_notifications():
-    conn = None
-    cursor = None
-    try:
-        data = request.get_json()
-        username = data.get('username')
-        if not username:
-            return jsonify({'success': False, 'message': 'Username required'}), 400
-
-        conn = mysql.connector.connect(**db_config)
-        cursor = conn.cursor()
-        cursor.execute(f"USE {db_config['database']}")
-        cursor.execute("""
-            UPDATE task_notifications SET is_read = 1 WHERE target_user = %s
-        """, (username,))
-        conn.commit()
-        return jsonify({'success': True, 'message': 'All notifications marked as read'})
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        return jsonify({'success': False, 'message': str(e)}), 500
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
-
-def calculate_next_alarm_time(start_time, frequency):
-    """Calculate the next alarm time based on start time and frequency"""
-    try:
-        # Parse start time
-        start_datetime = datetime.strptime(start_time, '%H:%M:%S')
-        
-        # Get current time
-        now = datetime.now()
-        current_time = now.time()
-        
-        # Calculate next alarm time
-        if frequency == '30 minutes':
-            interval = timedelta(minutes=30)
-        elif frequency == '1 hour':
-            interval = timedelta(hours=1)
-        elif frequency == '2 hours':
-            interval = timedelta(hours=2)
-        elif frequency == '4 hours':
-            interval = timedelta(hours=4)
-        elif frequency == '6 hours':
-            interval = timedelta(hours=6)
-        elif frequency == '8 hours':
-            interval = timedelta(hours=8)
-        else:
-            return None
+            if 'files[]' not in request.files:
+                logger.warning("No files[] in request.files")
+                return jsonify({
+                    'success': False,
+                    'message': 'No files provided'
+                }), 400
             
-        # Find next alarm time
-        next_alarm = start_datetime
-        while next_alarm.time() <= current_time:
-            next_alarm += interval
+            files = request.files.getlist('files[]')
+            logger.debug(f"Number of files: {len(files)}")
             
-        return next_alarm.strftime('%H:%M:%S')
-    except Exception as e:
-        logger.error(f"Error calculating next alarm time: {str(e)}")
-        return None
-
-@app.route('/tasks/<task_id>/schedule_alarm', methods=['POST'])
-def schedule_alarm(task_id):
-    conn = None
-    cursor = None
-    try:
-        data = request.get_json()
-        start_date = data.get('start_date')
-        start_time = data.get('start_time')
-        frequency = data.get('frequency')
-        
-        if not all([start_date, start_time, frequency]):
-            return jsonify({
-                'success': False,
-                'message': 'Missing required fields: start_date, start_time, frequency'
-            }), 400
+            file_type = request.form.get('type', 'attachment')
+            logger.debug(f"File type: {file_type}")
             
-        # Validate frequency
-        valid_frequencies = ['30min', '1hour', '2hours', '4hours']
-        if frequency not in valid_frequencies:
-            return jsonify({
-                'success': False,
-                'message': f'Invalid frequency. Must be one of: {", ".join(valid_frequencies)}'
-            }), 400
+            uploaded_files = []
             
-        conn = mysql.connector.connect(**db_config)
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute(f"USE {db_config['database']}")
-        
-        # Get task details
-        cursor.execute("""
-            SELECT t.task_id, t.title, t.assigned_to, u.fcm_token, u.timezone
-            FROM tasks t
-            JOIN users u ON t.assigned_to = u.username
-            WHERE t.task_id = %s
-        """, (task_id,))
-        
-        task = cursor.fetchone()
-        if not task:
-            return jsonify({
-                'success': False,
-                'message': 'Task not found'
-            }), 404
+            # Define allowed extensions
+            allowed_extensions = ALLOWED_AUDIO_EXTENSIONS if file_type == 'audio' else {'pdf', 'doc', 'docx', 'xls', 'xlsx', 'txt', 'jpg', 'jpeg', 'png'}
             
-        if not task['fcm_token']:
-            return jsonify({
-                'success': False,
-                'message': 'Assignee does not have FCM token registered'
-            }), 400
-            
-        # Calculate next alarm time
-        next_alarm_time = calculate_next_alarm_time(start_time, frequency)
-        if not next_alarm_time:
-            return jsonify({
-                'success': False,
-                'message': 'Error calculating next alarm time'
-            }), 500
-            
-        # Convert start time to user's timezone
-        user_timezone = task.get('timezone', DEFAULT_TIMEZONE)
-        try:
-            start_datetime = datetime.strptime(f"{start_date} {start_time}", '%Y-%m-%d %H:%M:%S')
-            start_datetime = convert_to_timezone(start_datetime, to_tz=user_timezone)
-            start_time = start_datetime.strftime('%H:%M:%S')
-        except Exception as e:
-            logger.error(f"Error converting timezone: {str(e)}")
-            
-        # Update or insert alarm settings
-        cursor.execute("""
-            INSERT INTO task_alarms (
-                alarm_id, task_id, start_date, start_time,
-                frequency, next_alarm_time, created_by,
-                acknowledged, acknowledged_at
-            )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON DUPLICATE KEY UPDATE
-                start_date = VALUES(start_date),
-                start_time = VALUES(start_time),
-                frequency = VALUES(frequency),
-                next_alarm_time = VALUES(next_alarm_time),
-                acknowledged = VALUES(acknowledged),
-                acknowledged_at = VALUES(acknowledged_at)
-        """, (
-            str(uuid.uuid4()),
-            task_id,
-            start_date,
-            start_time,
-            frequency,
-            next_alarm_time,
-            task['assigned_to'],
-            False,
-            None
-        ))
-        
-        conn.commit()
-        
-        # Send FCM notification for the first alarm
-        message = messaging.Message(
-            notification=messaging.Notification(
-                title=f"Task Reminder: {task['title']}",
-                body=f"Alarm set for {start_time} with {frequency} frequency"
-            ),
-            data={
-                'type': 'alarm',
-                'task_id': task_id,
-                'alarm_time': start_time,
-                'frequency': frequency
-            },
-            android=messaging.AndroidConfig(
-                priority='high',
-                notification=messaging.AndroidNotification(
-                    priority='max',
-                    sound='default',
-                    channel_id='task_alarms',
-                    importance='high',
-                    visibility='public',
-                    default_sound=True,
-                    default_vibrate_timings=True,
-                    default_light_settings=True
-                )
-            ),
-            apns=messaging.APNSConfig(
-                payload=messaging.APNSPayload(
-                    aps=messaging.Aps(
-                        sound='default',
-                        badge=1,
-                        content_available=True
-                    )
-                )
-            ),
-            token=task['fcm_token']
-        )
-        
-        try:
-            messaging.send(message)
-            logger.info(f"Alarm scheduled for task {task_id} with FCM token {task['fcm_token']}")
-        except Exception as e:
-            logger.error(f"Error sending FCM notification: {str(e)}")
-            # Don't fail the request if FCM fails
-            
-        return jsonify({
-            'success': True,
-            'message': 'Alarm scheduled successfully',
-            'next_alarm_time': next_alarm_time
-        })
-        
-    except Exception as e:
-        logger.error(f"Error scheduling alarm: {str(e)}")
-        if conn:
-            conn.rollback()
-        return jsonify({
-            'success': False,
-            'message': str(e)
-        }), 500
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
-
-@app.route('/tasks/<task_id>/acknowledge_alarm', methods=['POST'])
-def acknowledge_alarm(task_id):
-    conn = None
-    cursor = None
-    try:
-        data = request.get_json()
-        alarm_id = data.get('alarm_id')
-        
-        if not alarm_id:
-            return jsonify({
-                'success': False,
-                'message': 'Alarm ID is required'
-            }), 400
-            
-        conn = mysql.connector.connect(**db_config)
-        cursor = conn.cursor()
-        cursor.execute(f"USE {db_config['database']}")
-        
-        # Mark alarm as acknowledged
-        cursor.execute("""
-            UPDATE task_alarms 
-            SET acknowledged = TRUE,
-                acknowledged_at = NOW()
-            WHERE alarm_id = %s AND task_id = %s
-        """, (alarm_id, task_id))
-        
-        if cursor.rowcount == 0:
-            return jsonify({
-                'success': False,
-                'message': 'Alarm not found'
-            }), 404
-            
-        conn.commit()
-        return jsonify({
-            'success': True,
-            'message': 'Alarm acknowledged successfully'
-        })
-        
-    except Exception as e:
-        logger.error(f"Error acknowledging alarm: {str(e)}")
-        if conn:
-            conn.rollback()
-        return jsonify({
-            'success': False,
-            'message': str(e)
-        }), 500
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
-
-def alarm_service():
-    """Background service to check and trigger alarms"""
-    while True:
-        conn = None
-        cursor = None
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor(dictionary=True)
-            cursor.execute(f"USE {db_config['database']}")
-            
-            # Get current time
-            now = datetime.now()
-            current_time = now.strftime('%H:%M:%S')
-            
-            # Find alarms that need to be triggered
-            cursor.execute("""
-                SELECT ta.*, t.title, t.assigned_to, u.fcm_token, u.timezone
-                FROM task_alarms ta
-                JOIN tasks t ON ta.task_id = t.task_id
-                JOIN users u ON t.assigned_to = u.username
-                WHERE ta.next_alarm_time <= %s
-                AND (ta.acknowledged = FALSE OR ta.acknowledged IS NULL)
-                AND t.status != 'completed'
-            """, (current_time,))
-            
-            alarms = cursor.fetchall()
-            
-            if alarms:
-                logger.info(f"Found {len(alarms)} alarms to trigger")
+            for file in files:
+                if file.filename == '':
+                    logger.warning("Empty filename in request")
+                    continue
+                    
+                # Check file extension
+                extension = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else ''
+                logger.debug(f"File extension: {extension}")
                 
-                for alarm in alarms:
-                    try:
-                        # Convert alarm time to user's timezone
-                        user_timezone = alarm['timezone'] or 'UTC'
-                        alarm_time = datetime.combine(
-                            datetime.today(),
-                            alarm['next_alarm_time']
-                        )
-                        user_alarm_time = convert_to_timezone(alarm_time, user_timezone)
-                        
-                        # Try to send FCM notification if Firebase is configured
-                        if os.getenv('FIREBASE_CREDENTIALS') and alarm['fcm_token']:
-                            try:
-                                message = messaging.Message(
-                                    notification=messaging.Notification(
-                                        title=f"Task Reminder: {alarm['title']}",
-                                        body=f"Time to check your task!"
-                                    ),
-                                    data={
-                                        'type': 'alarm',
-                                        'task_id': alarm['task_id'],
-                                        'alarm_id': alarm['alarm_id']
-                                    },
-                                    token=alarm['fcm_token']
-                                )
-                                messaging.send(message)
-                                logger.info(f"Alarm triggered for task {alarm['task_id']}")
-                            except Exception as e:
-                                logger.warning(f"Failed to send FCM notification: {str(e)}")
-                        
-                        # Calculate and update next alarm time
-                        next_alarm_time = calculate_next_alarm_time(
-                            alarm['next_alarm_time'].strftime('%H:%M:%S'),
-                            alarm['frequency']
-                        )
-                        
-                        if next_alarm_time:
-                            cursor.execute("""
-                                UPDATE task_alarms
-                                SET next_alarm_time = %s,
-                                    acknowledged = FALSE
-                                WHERE alarm_id = %s
-                            """, (next_alarm_time, alarm['alarm_id']))
-                            conn.commit()
-                            
-                    except Exception as e:
-                        logger.error(f"Error processing alarm {alarm['alarm_id']}: {str(e)}")
-                        continue
-                        
-        except Exception as e:
-            logger.error(f"Error in alarm service: {str(e)}")
-        finally:
-            if cursor:
-                cursor.close()
-            if conn:
-                conn.close()
+                if extension not in allowed_extensions:
+                    logger.warning(f"Extension {extension} not in allowed extensions: {allowed_extensions}")
+                    return jsonify({
+                        'success': False,
+                        'message': f'File type .{extension} is not allowed'
+                    }), 400
+                    
+                # Generate unique ID for the file
+                file_id = str(uuid.uuid4())
+                
+                # Determine upload folder based on type
+                upload_folder = AUDIO_FOLDER if file_type == 'audio' else ATTACHMENTS_FOLDER
+                logger.debug(f"Upload folder: {upload_folder}")
+                
+                # Ensure filename is secure and unique
+                filename = secure_filename(f"{file_id}_{file.filename}")
+                file_path = os.path.join(upload_folder, filename)
+                logger.debug(f"File will be saved to: {file_path}")
+                
+                # Create directory if it doesn't exist
+                os.makedirs(upload_folder, exist_ok=True)
+                
+                # Save file in chunks
+                chunk_size = 8192  # 8KB chunks
+                with open(file_path, 'wb') as f:
+                    while True:
+                        chunk = file.read(chunk_size)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                
+                # Get relative path for database
+                relative_path = os.path.join('uploads', 'audio' if file_type == 'audio' else 'attachments', filename)
+                
+                # Get file size
+                file_size = os.path.getsize(file_path)
+                logger.debug(f"File saved successfully. Size: {file_size} bytes")
+                
+                uploaded_files.append({
+                    'file_id': file_id,
+                    'file_path': relative_path,
+                    'file_name': file.filename,
+                    'file_type': extension,
+                    'file_size': file_size
+                })
             
-        # Sleep for 30 seconds before next check
-        time.sleep(30)
-
-# Start alarm service in a separate thread
-alarm_thread = threading.Thread(target=alarm_service, daemon=True)
-alarm_thread.start()
-
-# Add a health check endpoint
-@app.route('/health', methods=['GET'])
-def health_check():
-    return jsonify({
-        'status': 'healthy',
-        'timestamp': datetime.now().isoformat(),
-        'connected_clients': len(connected_users)
-    })
-
-# ---------------- DOWNLOAD AUDIO NOTE ----------------
-@app.route('/api/tasks/<task_id>/audio/<audio_id>/download', methods=['GET'])
-def download_audio_note(task_id, audio_id):
-    conn = None
-    cursor = None
-    try:
-        logger.info(f"Attempting to download audio note - Task ID: {task_id}, Audio ID: {audio_id}")
-        conn = mysql.connector.connect(**db_config)
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute(f"USE {db_config['database']}")
-
-        # Get audio note details
-        cursor.execute("""
-            SELECT file_path, file_name, audio_id
-            FROM task_audio_notes
-            WHERE task_id = %s AND audio_id = %s
-        """, (task_id, audio_id))
-
-        audio_note = cursor.fetchone()
-        if not audio_note:
-            logger.error(f"Audio note not found - Task ID: {task_id}, Audio ID: {audio_id}")
-            return jsonify({
-                'success': False,
-                'message': 'Audio note not found'
-            }), 404
-
-        file_path = audio_note['file_path']
-        logger.info(f"File path from DB: {file_path}")
-
-        # Try absolute path first
-        abs_exists = os.path.exists(file_path)
-        logger.info(f"Absolute path exists: {abs_exists}")
-
-        # Try relative path from project root
-        rel_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), file_path.lstrip('/'))
-        rel_exists = os.path.exists(rel_path)
-        logger.info(f"Relative path checked: {rel_path}, exists: {rel_exists}")
-
-        if abs_exists:
-            serve_path = file_path
-        elif rel_exists:
-            serve_path = rel_path
-        else:
-            logger.error(f"Audio file not found at absolute or relative path. Absolute: {file_path}, Relative: {rel_path}")
-            return jsonify({
-                'success': False,
-                'message': f'Audio file not found. Checked absolute: {file_path}, relative: {rel_path}'
-            }), 404
-
-        extension = audio_note['file_name'].rsplit('.', 1)[1].lower() if '.' in audio_note['file_name'] else ''
-        if extension == 'wav':
-            mimetype = 'audio/wav'
-        elif extension == 'mp3':
-            mimetype = 'audio/mpeg'
-        elif extension == 'm4a':
-            mimetype = 'audio/mp4'
-        elif extension == 'ogg':
-            mimetype = 'audio/ogg'
-        else:
-            mimetype = 'application/octet-stream'
-
-        logger.info(f"Sending file: {serve_path} with mimetype: {mimetype}")
-        return send_file(
-            serve_path,
-            mimetype=mimetype,
-            as_attachment=False,
-            download_name=audio_note['file_name']
-        )
-
-    except Exception as e:
-        logger.error(f"Error downloading audio note: {str(e)}")
-        return jsonify({
-            'success': False,
-            'message': f"Error downloading audio note: {str(e)}"
-        }), 500
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
-
-@app.route('/alarms/test_trigger', methods=['GET'])
-def test_alarm_trigger():
-    """Test endpoint to manually trigger an alarm for a user's device"""
-    try:
-        # Get task_id and username from query parameters
-        task_id = request.args.get('task_id')
-        username = request.args.get('username')
-        
-        if not task_id or not username:
-            return jsonify({
-                'success': False,
-                'message': 'Missing required parameters: task_id and username'
-            }), 400
-            
-        conn = mysql.connector.connect(**db_config)
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute(f"USE {db_config['database']}")
-        
-        # Get task and user details
-        cursor.execute("""
-            SELECT t.task_id, t.title, t.description, u.user_id, u.fcm_token
-            FROM tasks t
-            JOIN users u ON t.assigned_to = u.username
-            WHERE t.task_id = %s AND u.username = %s
-        """, (task_id, username))
-        
-        result = cursor.fetchone()
-        if not result:
-            return jsonify({
-                'success': False,
-                'message': f'Task not found or user {username} is not assigned to this task'
-            }), 404
-            
-        if not result['fcm_token']:
-            return jsonify({
-                'success': False,
-                'message': f'User {username} does not have a registered FCM token'
-            }), 400
-            
-        # Prepare notification data with special flags for immediate alarm
-        notification = {
-            "title": f"🔔 IMMEDIATE ALARM TEST: {result['title']}",
-            "body": result['description'] or "Immediate alarm test - should play sound now!",
-            "sound": "alarm"
-        }
-        
-        # Prepare data payload with immediate flag
-        data = {
-            "type": "task_alarm",
-            "task_id": result['task_id'],
-            "alarm_id": f"test_{uuid.uuid4()}",
-            "title": result['title'],
-            "click_action": "FLUTTER_NOTIFICATION_CLICK",
-            "immediate_alarm": "true",  # Special flag to indicate immediate alarm
-            "play_sound_now": "true",   # Flag to trigger immediate sound playback
-            "urgent": "true",           # Flag to indicate urgency
-            "test_timestamp": str(int(time.time())),  # Add timestamp for testing
-            "alarm_mode": "immediate"   # Set alarm mode to immediate
-        }
-        
-        # Prepare FCM message with highest priority settings
-        message = {
-            "to": result['fcm_token'],
-            "notification": notification,
-            "data": data,
-            "priority": "high",
-            "time_to_live": 0,  # Expire immediately if not delivered
-            "android": {
-                "priority": "high",
-                "ttl": "0s",   # Zero TTL for immediate delivery
-                "notification": {
-                    "sound": "alarm",
-                    "channel_id": "task_alarms",
-                    "priority": "max",
-                    "visibility": "public",
-                    "default_sound": False,
-                    "default_vibrate_timings": False,
-                    "vibrate_timings": ["0.1s", "0.1s", "0.1s", "0.1s", "0.1s"],
-                    "notification_count": 1
-                }
-            },
-            "apns": {
-                "headers": {
-                    "apns-priority": "10",  # Highest priority
-                    "apns-push-type": "alert"
-                },
-                "payload": {
-                    "aps": {
-                        "sound": "alarm.wav",
-                        "content-available": 1,  # Trigger silent push to wake app
-                        "mutable-content": 1,    # Allow app to modify notification
-                        "badge": 1,
-                        "priority": 10,
-                        "interruption-level": "critical"  # Highest interruption level
-                    }
-                }
-            }
-        }
-        
-        # Send FCM request
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"key={FCM_SERVER_KEY}"
-        }
-        
-        logger.info(f"Sending immediate alarm test notification to {username}")
-        logger.info(f"FCM token: {result['fcm_token'][:20]}...")
-        logger.info(f"Message data: {data}")
-        
-        response = requests.post(
-            FCM_API_URL,
-            data=json.dumps(message),
-            headers=headers
-        )
-        
-        if response.status_code == 200:
-            logger.info(f"Immediate alarm test sent successfully to {username}")
+            logger.info(f"Successfully uploaded {len(uploaded_files)} files")
             return jsonify({
                 'success': True,
-                'message': f'Immediate alarm test sent successfully to {username}',
-                'fcm_response': json.loads(response.text)
-            })
-        else:
-            logger.error(f"Failed to send immediate alarm test: {response.text}")
-            return jsonify({
-                'success': False,
-                'message': f'Failed to send FCM notification: {response.text}'
-            }), 500
-            
+                'files': uploaded_files
+            }), 200
     except Exception as e:
-        logger.error(f"Error in test_alarm_trigger: {str(e)}")
+        logger.error(f"Error uploading files: {str(e)}", exc_info=True)  # Include stack trace
         return jsonify({
             'success': False,
-            'message': str(e)
+            'message': f"Error uploading files: {str(e)}"
         }), 500
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
 
 @app.route('/tasks/<task_id>', methods=['GET'])
 def get_task(task_id):
@@ -3153,42 +2577,36 @@ def get_task(task_id):
         if conn:
             conn.close()
 
+# Serve audio files from uploads/audio
+@app.route('/uploads/audio/<path:filename>')
+def serve_audio(filename):
+    return send_from_directory(AUDIO_FOLDER, filename)
+
 # ---------------- MAIN ----------------
 if __name__ == '__main__':
     # Initialize the application
     initialize_application()
     
-    # Add a periodic task to check for stale connections
     def check_stale_connections():
         try:
-            current_time = time.time()
-            stale_sids = []
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM active_connections WHERE last_heartbeat < NOW() - INTERVAL 5 MINUTE")
+            stale_connections = cursor.fetchall()
             
-            for sid, last_time in list(last_heartbeat.items()):
-                if current_time - last_time > 300:  # 5 minutes without heartbeat
-                    stale_sids.append(sid)
+            for connection in stale_connections:
+                cursor.execute("DELETE FROM active_connections WHERE connection_id = %s", (connection[0],))
             
-            # Clean up stale connections
-            for sid in stale_sids:
-                logger.info(f"Removing stale connection: {sid}")
-                
-                # Find and remove username
-                for username, connected_sid in list(connected_users.items()):
-                    if connected_sid == sid:
-                        logger.info(f"Removing stale user: {username}")
-                        del connected_users[username]
-                
-                # Remove from heartbeat tracking
-                if sid in last_heartbeat:
-                    del last_heartbeat[sid]
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            if stale_connections:
+                logger.info(f"Cleaned up {len(stale_connections)} stale connections")
         except Exception as e:
-            logger.error(f"Error in check_stale_connections: {str(e)}")
-            logger.exception("Full traceback:")
-
-    # Schedule the stale connection check to run periodically
+            logger.error(f"Error checking stale connections: {str(e)}")
+    
     def start_heartbeat_checker():
-        import threading
-        
         def run_checker():
             while True:
                 time.sleep(60)  # Check every minute
@@ -3207,39 +2625,5 @@ if __name__ == '__main__':
     
     # Run the server using socketio.run() with eventlet
     print(f'Server starting on http://0.0.0.0:{port} in {env} mode')
-    socketio.run(app, host='0.0.0.0', port=port, debug=(env == 'development')) 
-
-@app.route('/tasks/<task_id>', methods=['GET'])
-def get_task(task_id):
-    conn = None
-    cursor = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute(f"USE {db_config['database']}")
-        # Get task details
-        cursor.execute("SELECT * FROM tasks WHERE task_id = %s", (task_id,))
-        task = cursor.fetchone()
-        if not task:
-            return jsonify({'success': False, 'message': 'Task not found'}), 404
-
-        # Get alarm settings
-        cursor.execute("SELECT start_date, start_time, frequency FROM task_alarms WHERE task_id = %s", (task_id,))
-        alarm = cursor.fetchone()
-        if alarm:
-            task['alarm_settings'] = alarm
-        else:
-            task['alarm_settings'] = None
-
-        return jsonify({'success': True, 'task': task}), 200
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        logger.error(f"Error fetching task: {str(e)}")
-        return jsonify({'success': False, 'message': f"Error fetching task: {str(e)}"}), 500
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+    socketio.run(app, host='0.0.0.0', port=port, debug=(env == 'development'))
 
