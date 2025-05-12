@@ -1,6 +1,6 @@
-# Apply gevent monkey patching first
-from gevent import monkey
-monkey.patch_all()
+# Apply eventlet monkey patching first
+import eventlet
+eventlet.monkey_patch()
 
 from flask import Flask, request, jsonify, send_file, Response, send_from_directory
 from flask_cors import CORS
@@ -21,12 +21,11 @@ import shutil
 from firebase_admin import messaging, initialize_app, credentials
 import time
 import threading
-import pytz  # Add this import at the top
+import pytz
 import requests
 from auth import generate_tokens, jwt_token_required, role_required
 import sys
 import hashlib
-import gevent  # Import gevent for the SocketIO async mode
 
 # Setup logging
 logging.basicConfig(
@@ -348,8 +347,8 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 socketio = SocketIO(
     app,
     cors_allowed_origins="*",
-    async_mode='gevent',  # Changed from threading to gevent for better compatibility
-    ping_timeout=120,     # Increased from 60 to allow more time for slow connections
+    async_mode='eventlet',  # Changed from gevent to eventlet
+    ping_timeout=120,
     ping_interval=25,
     logger=True,
     engineio_logger=True,
@@ -2958,6 +2957,6 @@ if __name__ == '__main__':
     env = os.getenv('FLASK_ENV', 'production')
     port = 5001 if env == 'development' else 5000
     
-    # Run the server using socketio.run() which is better for gevent mode
+    # Run the server using socketio.run() with eventlet
     print(f'Server starting on http://0.0.0.0:{port} in {env} mode')
     socketio.run(app, host='0.0.0.0', port=port, debug=(env == 'development')) 
