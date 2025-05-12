@@ -160,6 +160,22 @@ def init_db():
                 )
             """)
 
+            # Create user_tokens table for JWT token storage
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS user_tokens (
+                    id VARCHAR(36) PRIMARY KEY,
+                    user_id VARCHAR(36) NOT NULL,
+                    access_token TEXT NOT NULL,
+                    refresh_token TEXT NOT NULL,
+                    access_token_expires_at TIMESTAMP NOT NULL,
+                    refresh_token_expires_at TIMESTAMP NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    is_revoked BOOLEAN DEFAULT FALSE,
+                    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+                    INDEX idx_user_tokens (user_id, is_revoked)
+                )
+            """)
+
             # Create tasks table with optional alarm fields
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS tasks (
@@ -768,118 +784,219 @@ def signup():
 # ---------------- LOGIN ----------------
 @app.route('/login', methods=['POST'])
 def login():
-    conn = None
-    cursor = None
     try:
         data = request.get_json()
-        logger.info(f"Login attempt for user: {data.get('username')}")
-        
-        if not data or not data.get('username') or not data.get('password'):
-            return jsonify({'message': 'Username and password are required'}), 400
+        username = data.get('username')
+        password = data.get('password')
+        fcm_token = data.get('fcm_token', '')
 
-        conn = mysql.connector.connect(**db_config)
+        if not username or not password:
+            return jsonify({'message': 'Missing username or password'}), 400
+
+        conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
-        cursor.execute(f"USE {db_config['database']}")
 
-        # First verify user credentials
-        cursor.execute("""
-            SELECT user_id, username, email, phone, password, role, fcm_token
-            FROM users WHERE username = %s AND password = %s
-        """, (data['username'], data['password']))
-
+        # Get user details
+        cursor.execute(
+            "SELECT user_id, username, password, role FROM users WHERE username = %s",
+            (username,)
+        )
         user = cursor.fetchone()
-        if not user:
-            logger.warning(f"Invalid login attempt for user: {data.get('username')}")
+
+        if not user or not verify_password(password, user['password']):
             return jsonify({'message': 'Invalid username or password'}), 401
 
-        # Update FCM token if provided
-        fcm_token = data.get('fcm_token')
-        if fcm_token:
-            logger.info(f"Updating FCM token for user: {user['username']}")
-            try:
-                cursor.execute("""
-                    UPDATE users 
-                    SET fcm_token = %s,
-                        updated_at = NOW()
-                    WHERE user_id = %s
-                """, (fcm_token, user['user_id']))
-                conn.commit()
-                logger.info(f"FCM token updated successfully for user: {user['username']}")
-            except Exception as e:
-                logger.error(f"Failed to update FCM token for user {user['username']}: {str(e)}")
-                # Don't fail the login if FCM update fails
-                conn.rollback()
-        else:
-            logger.warning(f"No FCM token provided for user: {user['username']}")
+        # Generate new tokens
+        access_token, refresh_token = generate_tokens(user)
+        
+        # Calculate token expiry times
+        access_token_expires = datetime.utcnow() + app.config['JWT_ACCESS_TOKEN_EXPIRES']
+        refresh_token_expires = datetime.utcnow() + timedelta(days=30)  # 30 days for refresh token
 
-        # Generate JWT tokens
-        tokens = generate_tokens({
-            'user_id': user['user_id'],
-            'username': user['username'],
-            'role': user['role']
-        })
+        # Store tokens in database
+        token_id = str(uuid.uuid4())
+        cursor.execute("""
+            INSERT INTO user_tokens (
+                id, user_id, access_token, refresh_token, 
+                access_token_expires_at, refresh_token_expires_at
+            ) VALUES (%s, %s, %s, %s, %s, %s)
+        """, (
+            token_id, user['user_id'], access_token, refresh_token,
+            access_token_expires, refresh_token_expires
+        ))
+
+        # Revoke old tokens for this user
+        cursor.execute("""
+            UPDATE user_tokens 
+            SET is_revoked = TRUE 
+            WHERE user_id = %s AND id != %s
+        """, (user['user_id'], token_id))
+
+        conn.commit()
+
+        # Update FCM token if provided
+        if fcm_token:
+            cursor.execute(
+                "UPDATE users SET fcm_token = %s WHERE username = %s",
+                (fcm_token, username)
+            )
+            conn.commit()
 
         return jsonify({
-            'message': 'Login successful',
             'user_id': user['user_id'],
             'username': user['username'],
             'role': user['role'],
-            'fcm_token_updated': bool(fcm_token),
-            'access_token': tokens['access_token'],
-            'refresh_token': tokens['refresh_token'],
-            'expires_in': tokens['expires_in']
+            'access_token': access_token,
+            'refresh_token': refresh_token
         }), 200
 
     except Exception as e:
         logger.error(f"Login error: {str(e)}")
-        return jsonify({'message': f'Login failed: {str(e)}'}), 500
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+        return jsonify({'message': 'An error occurred during login'}), 500
 
-# Add a token refresh endpoint
 @app.route('/refresh_token', methods=['POST'])
 @jwt_required(refresh=True)
 def refresh_token():
     try:
-        # Get user identity from refresh token
-        user_id = get_jwt_identity()
+        # Get current user identity from refresh token
+        current_user = get_jwt_identity()
         
-        # Connect to database to get current user data
-        conn = mysql.connector.connect(**db_config)
+        conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
-        cursor.execute(f"USE {db_config['database']}")
-        
+
         # Get user details
-        cursor.execute("SELECT username, role FROM users WHERE user_id = %s", (user_id,))
+        cursor.execute(
+            "SELECT user_id, username, role FROM users WHERE username = %s",
+            (current_user,)
+        )
         user = cursor.fetchone()
-        
+
         if not user:
             return jsonify({'message': 'User not found'}), 404
+
+        # Check if the refresh token is valid and not revoked
+        auth_header = request.headers.get('Authorization')
+        if auth_header:
+            refresh_token = auth_header.split(' ')[1]
+            cursor.execute("""
+                SELECT id FROM user_tokens 
+                WHERE user_id = %s 
+                AND refresh_token = %s 
+                AND is_revoked = FALSE 
+                AND refresh_token_expires_at > NOW()
+            """, (user['user_id'], refresh_token))
             
+            token_record = cursor.fetchone()
+            if not token_record:
+                return jsonify({'message': 'Invalid or expired refresh token'}), 401
+
+            # Revoke the old token
+            cursor.execute("""
+                UPDATE user_tokens 
+                SET is_revoked = TRUE 
+                WHERE id = %s
+            """, (token_record['id'],))
+
         # Generate new tokens
-        tokens = generate_tokens({
-            'user_id': user_id,
-            'username': user['username'],
-            'role': user['role']
-        })
+        new_access_token, new_refresh_token = generate_tokens(user)
         
+        # Calculate new expiry times
+        access_token_expires = datetime.utcnow() + app.config['JWT_ACCESS_TOKEN_EXPIRES']
+        refresh_token_expires = datetime.utcnow() + timedelta(days=30)
+
+        # Store new tokens
+        token_id = str(uuid.uuid4())
+        cursor.execute("""
+            INSERT INTO user_tokens (
+                id, user_id, access_token, refresh_token, 
+                access_token_expires_at, refresh_token_expires_at
+            ) VALUES (%s, %s, %s, %s, %s, %s)
+        """, (
+            token_id, user['user_id'], new_access_token, new_refresh_token,
+            access_token_expires, refresh_token_expires
+        ))
+
+        conn.commit()
+
         return jsonify({
-            'access_token': tokens['access_token'],
-            'refresh_token': tokens['refresh_token'],
-            'expires_in': tokens['expires_in']
+            'access_token': new_access_token,
+            'refresh_token': new_refresh_token
         }), 200
-        
+
     except Exception as e:
         logger.error(f"Token refresh error: {str(e)}")
-        return jsonify({'message': f'Token refresh failed: {str(e)}'}), 500
-    finally:
-        if 'cursor' in locals() and cursor:
-            cursor.close()
-        if 'conn' in locals() and conn:
-            conn.close()
+        return jsonify({'message': 'An error occurred while refreshing token'}), 500
+
+@app.route('/logout', methods=['POST'])
+@jwt_required()
+def logout():
+    try:
+        current_user = get_jwt_identity()
+        
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+
+        # Get user details
+        cursor.execute(
+            "SELECT user_id FROM users WHERE username = %s",
+            (current_user,)
+        )
+        user = cursor.fetchone()
+
+        if not user:
+            return jsonify({'message': 'User not found'}), 404
+
+        # Revoke all tokens for the user
+        cursor.execute("""
+            UPDATE user_tokens 
+            SET is_revoked = TRUE 
+            WHERE user_id = %s
+        """, (user['user_id'],))
+
+        conn.commit()
+
+        return jsonify({'message': 'Successfully logged out'}), 200
+
+    except Exception as e:
+        logger.error(f"Logout error: {str(e)}")
+        return jsonify({'message': 'An error occurred during logout'}), 500
+
+# Add a periodic task to clean up expired tokens
+def cleanup_expired_tokens():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Delete expired tokens
+        cursor.execute("""
+            DELETE FROM user_tokens 
+            WHERE refresh_token_expires_at < NOW() 
+            OR (is_revoked = TRUE AND created_at < DATE_SUB(NOW(), INTERVAL 30 DAY))
+        """)
+
+        conn.commit()
+        logger.info("Cleaned up expired tokens")
+
+    except Exception as e:
+        logger.error(f"Token cleanup error: {str(e)}")
+
+# Add token cleanup to the initialization
+def initialize_application():
+    try:
+        init_db()
+        # Start token cleanup thread
+        def run_token_cleanup():
+            while True:
+                cleanup_expired_tokens()
+                time.sleep(3600)  # Run every hour
+        
+        cleanup_thread = threading.Thread(target=run_token_cleanup, daemon=True)
+        cleanup_thread.start()
+        
+        logger.info("Application initialized successfully")
+    except Exception as e:
+        logger.error(f"Error initializing application: {str(e)}")
+        sys.exit(1)
 
 # ---------------- CREATE TASK ----------------
 @app.route('/tasks', methods=['POST'])
