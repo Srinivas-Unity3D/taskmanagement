@@ -1,6 +1,8 @@
 import os
 from datetime import timedelta
 
+
+
 class Config:
     # Flask Configuration
     SECRET_KEY = os.getenv('SECRET_KEY', 'your-secret-key-here')
