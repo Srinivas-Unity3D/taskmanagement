@@ -27,9 +27,20 @@ from auth import generate_tokens, jwt_token_required, role_required
 import sys
 import hashlib
 
+def verify_password(provided_password, stored_password):
+    """Verify a password against its stored hash"""
+    try:
+        # For now, we're using a simple hash comparison
+        # In production, you should use a proper password hashing library like bcrypt
+        hashed = hashlib.sha256(provided_password.encode()).hexdigest()
+        return hashed == stored_password
+    except Exception as e:
+        logger.error(f"Error verifying password: {str(e)}")
+        return False
+
 # Setup logging
 logging.basicConfig(
-    level=logging.DEBUG,  # Set to DEBUG for more detailed logs
+    level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('app.log'),
@@ -448,7 +459,8 @@ def handle_disconnect(sid=None):
         logger.exception("Full traceback:")
 
 @socketio.on('heartbeat')
-def handle_heartbeat():
+def handle_heartbeat(data=None):
+    """Handle heartbeat events from clients"""
     try:
         sid = request.sid
         last_heartbeat[sid] = time.time()
