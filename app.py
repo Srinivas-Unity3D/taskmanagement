@@ -988,199 +988,24 @@ def initialize_application():
         sys.exit(1)
 
 # ---------------- CREATE TASK ----------------
-# @app.route('/tasks', methods=['POST'])
-# def create_task():
-#     conn = None
-#     cursor = None
-#     try:
-#         data = request.get_json()
-        
-#         # Validate required fields
-#         required_fields = ['title', 'description', 'assigned_to', 'assigned_by', 'priority', 'status', 'deadline']
-#         for field in required_fields:
-#             if field not in data:
-#                 return jsonify({
-#                     'success': False,
-#                     'message': f'Missing required field: {field}'
-#                 }), 400
-
-#         title = data['title']
-#         description = data['description']
-#         assigned_to = data['assigned_to']
-#         assigned_by = data['assigned_by']
-#         priority = data['priority']
-#         status = data['status']
-#         deadline = data['deadline']
-#         audio_note = data.get('audio_note')
-#         attachments = data.get('attachments', [])
-#         alarm_settings = data.get('alarm_settings')
-
-#         # Initialize database connection
-#         conn = get_db_connection()
-#         cursor = conn.cursor(dictionary=True)
-#         cursor.execute(f"USE {db_config['database']}")
-
-#         # Generate task ID
-#         task_id = str(uuid.uuid4())
-
-#         # Insert task
-#         cursor.execute("""
-#             INSERT INTO tasks (
-#                 task_id, title, description, assigned_to,
-#                 assigned_by, priority, status, deadline
-#             )
-#             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-#         """, (
-#             task_id, title, description, assigned_to,
-#             assigned_by, priority, status, deadline
-#         ))
-
-#         # Handle audio note
-#         if audio_note:
-#             try:
-#                 audio_id = str(uuid.uuid4())
-#                 audio_data = audio_note.get('audio_data')
-#                 duration = audio_note.get('duration', 0)
-#                 file_name = audio_note.get('filename', 'voice_note.wav')
-#                 created_by = data.get('updated_by', assigned_by)
-                
-#                 if audio_data:
-#                     # Save audio file
-#                     audio_path = os.path.join(AUDIO_FOLDER, f"{audio_id}_{file_name}")
-#                     os.makedirs(AUDIO_FOLDER, exist_ok=True)
-#                     with open(audio_path, 'wb') as f:
-#                         f.write(base64.b64decode(audio_data))
-                    
-#                     # Insert audio note record
-#                     cursor.execute("""
-#                         INSERT INTO task_audio_notes (
-#                             audio_id, task_id, file_path, duration, 
-#                             file_name, created_by, note_type
-#                         )
-#                         VALUES (%s, %s, %s, %s, %s, %s, %s)
-#                     """, (
-#                         audio_id, task_id, audio_path, duration,
-#                         file_name, created_by, 'normal'
-#                     ))
-#                     logger.info(f"Added audio note: {audio_id}")
-#             except Exception as e:
-#                 logger.error(f"Error handling audio note: {str(e)}")
-#                 raise
-
-#         # Handle attachments
-#         if attachments:
-#             for attachment in attachments:
-#                 try:
-#                     attachment_id = str(uuid.uuid4())
-#                     file_data = attachment.get('file_data')
-#                     file_name = attachment.get('file_name')
-#                     file_type = attachment.get('file_type')
-                    
-#                     if file_data and file_name:
-#                         # Save attachment file
-#                         attachment_path = os.path.join(ATTACHMENTS_FOLDER, f"{attachment_id}_{file_name}")
-#                         os.makedirs(ATTACHMENTS_FOLDER, exist_ok=True)
-#                         with open(attachment_path, 'wb') as f:
-#                             f.write(base64.b64decode(file_data))
-                        
-#                         # Get file size
-#                         file_size = os.path.getsize(attachment_path)
-                        
-#                         # Insert attachment record
-#                         cursor.execute("""
-#                             INSERT INTO task_attachments (
-#                                 attachment_id, task_id, file_name,
-#                                 file_path, file_type, file_size,
-#                                 created_by
-#                             )
-#                             VALUES (%s, %s, %s, %s, %s, %s, %s)
-#                         """, (
-#                             attachment_id,
-#                             task_id,
-#                             file_name,
-#                             attachment_path,
-#                             file_type,
-#                             file_size,
-#                             assigned_by
-#                         ))
-#                         logger.info(f"Added attachment: {attachment_id}")
-#                 except Exception as e:
-#                     logger.error(f"Error handling attachment: {str(e)}")
-#                     continue
-
-#         # Handle alarm settings
-#         if alarm_settings:
-#             alarm_id = str(uuid.uuid4())
-#             cursor.execute("""
-#                 INSERT INTO task_alarms (
-#                     alarm_id, task_id, start_date, start_time,
-#                     frequency, created_by
-#                 )
-#                 VALUES (%s, %s, %s, %s, %s, %s)
-#             """, (
-#                 alarm_id,
-#                 task_id,
-#                 alarm_settings.get('start_date'),
-#                 alarm_settings.get('start_time'),
-#                 alarm_settings.get('frequency'),
-#                 assigned_by
-#             ))
-
-#         conn.commit()
-        
-#         # Notify about task creation
-#         try:
-#             notify_task_update({
-#                 'task_id': task_id,
-#                 'title': title,
-#                 'description': description,
-#                 'assigned_to': assigned_to,
-#                 'assigned_by': assigned_by,
-#                 'priority': priority,
-#                 'status': status,
-#                 'deadline': deadline
-#             }, 'task_created')
-#         except Exception as e:
-#             logger.error(f"Error sending task creation notification: {str(e)}")
-        
-#         return jsonify({
-#             'success': True,
-#             'message': 'Task created successfully',
-#             'task_id': task_id
-#         }), 201
-        
-#     except Exception as e:
-#         if conn:
-#             conn.rollback()
-#         logger.error(f"Error creating task: {str(e)}")
-#         return jsonify({
-#             'success': False,
-#             'message': f"Error creating task: {str(e)}"
-#         }), 500
-#     finally:
-#         if cursor:
-#             cursor.close()
-#         if conn:
-#             conn.close()
-
-#--------Initialize Firebase Admin SDK--------
-
-# Remove or comment out the problematic line
-# cred = credentials.Certificate(Config.FIREBASE_CREDENTIALS_PATH)
-# firebase_admin.initialize_app(cred)
-
-# ---------------- CREATE TASK ----------------
 @app.route('/tasks', methods=['POST'])
+@jwt_required()
 def create_task():
     conn = None
     cursor = None
     try:
+        # Get user identity from token
+        current_user = get_jwt_identity()
+        logger.info(f"Create task request by user: {current_user}")
+        
         data = request.get_json()
+        logger.debug(f"Task creation data: {data}")
         
         # Validate required fields
         required_fields = ['title', 'description', 'assigned_to', 'assigned_by', 'priority', 'status', 'deadline']
         for field in required_fields:
             if field not in data:
+                logger.warning(f"Missing required field in task creation: {field}")
                 return jsonify({
                     'success': False,
                     'message': f'Missing required field: {field}'
@@ -1196,6 +1021,8 @@ def create_task():
         audio_note = data.get('audio_note')
         attachments = data.get('attachments', [])
         alarm_settings = data.get('alarm_settings')
+        
+        logger.info(f"Creating task: {title} for {assigned_to}, alarm settings: {alarm_settings}")
 
         # Initialize database connection
         conn = get_db_connection()
@@ -1775,224 +1602,24 @@ def get_task_assignments(user_id):
             conn.close()
 
 # ---------------- UPDATE TASK ----------------
-# @app.route('/tasks/<task_id>', methods=['PUT'])
-# def update_task(task_id):
-#     conn = None
-#     cursor = None
-#     try:
-#         data = request.get_json()
-        
-#         # Validate required fields
-#         required_fields = ['title', 'description', 'assigned_to', 'assigned_by', 'priority', 'status', 'deadline']
-#         for field in required_fields:
-#             if field not in data:
-#                 return jsonify({
-#                     'success': False,
-#                     'message': f'Missing required field: {field}',
-#                     'task_id': task_id
-#                 }), 400
-
-#         title = data['title']
-#         description = data['description']
-#         assigned_to = data['assigned_to']
-#         assigned_by = data['assigned_by']
-#         priority = data['priority'].lower()  # Convert to lowercase for consistency
-#         status = data['status'].lower()  # Convert to lowercase for consistency
-#         deadline = data['deadline']
-#         audio_note = data.get('audio_note')
-#         attachments = data.get('attachments', [])
-#         alarm_settings = data.get('alarm_settings')
-
-#         # Validate priority
-#         valid_priorities = ['low', 'medium', 'high', 'urgent']
-#         if priority not in valid_priorities:
-#             return jsonify({
-#                 'success': False,
-#                 'message': f'Invalid priority: {priority}. Must be one of {valid_priorities}',
-#                 'task_id': task_id
-#             }), 400
-
-#         # Validate status
-#         valid_statuses = ['pending', 'in_progress', 'completed', 'snoozed']
-#         if status not in valid_statuses:
-#             return jsonify({
-#                 'success': False,
-#                 'message': f'Invalid status: {status}. Must be one of {valid_statuses}',
-#                 'task_id': task_id
-#             }), 400
-
-#         # Initialize database connection
-#         conn = get_db_connection()
-#         cursor = conn.cursor(dictionary=True)
-#         cursor.execute(f"USE {db_config['database']}")
-
-#         # Update task
-#         cursor.execute("""
-#             UPDATE tasks
-#             SET title = %s,
-#                 description = %s,
-#                 assigned_to = %s,
-#                 assigned_by = %s,
-#                 priority = %s,
-#                 status = %s,
-#                 deadline = %s,
-#                 updated_at = NOW()
-#             WHERE task_id = %s
-#         """, (
-#             title, description, assigned_to,
-#             assigned_by, priority, status, deadline,
-#             task_id
-#         ))
-
-#         # Handle audio note
-#         if audio_note:
-#             try:
-#                 audio_id = str(uuid.uuid4())
-#                 audio_data = audio_note.get('audio_data')
-#                 duration = audio_note.get('duration', 0)
-#                 file_name = audio_note.get('filename', 'voice_note.wav')
-#                 created_by = data.get('updated_by', assigned_by)
-                
-#                 if audio_data:
-#                     # Save audio file
-#                     audio_path = os.path.join(AUDIO_FOLDER, f"{audio_id}_{file_name}")
-#                     os.makedirs(AUDIO_FOLDER, exist_ok=True)
-#                     with open(audio_path, 'wb') as f:
-#                         f.write(base64.b64decode(audio_data))
-                    
-#                     # Insert audio note record
-#                     cursor.execute("""
-#                         INSERT INTO task_audio_notes (
-#                             audio_id, task_id, file_path, duration, 
-#                             file_name, created_by, note_type
-#                         )
-#                         VALUES (%s, %s, %s, %s, %s, %s, %s)
-#                     """, (
-#                         audio_id, task_id, audio_path, duration,
-#                         file_name, created_by, 'normal'
-#                     ))
-#                     logger.info(f"Added audio note: {audio_id}")
-#             except Exception as e:
-#                 logger.error(f"Error handling audio note: {str(e)}")
-#                 raise
-
-#         # Handle attachments
-#         if attachments:
-#             for attachment in attachments:
-#                 try:
-#                     attachment_id = str(uuid.uuid4())
-#                     file_data = attachment.get('file_data')
-#                     file_name = attachment.get('file_name')
-#                     file_type = attachment.get('file_type')
-                    
-#                     if file_data and file_name:
-#                         # Save attachment file
-#                         attachment_path = os.path.join(ATTACHMENTS_FOLDER, f"{attachment_id}_{file_name}")
-#                         os.makedirs(ATTACHMENTS_FOLDER, exist_ok=True)
-#                         with open(attachment_path, 'wb') as f:
-#                             f.write(base64.b64decode(file_data))
-                        
-#                         # Get file size
-#                         file_size = os.path.getsize(attachment_path)
-                        
-#                         # Insert attachment record
-#                         cursor.execute("""
-#                             INSERT INTO task_attachments (
-#                                 attachment_id, task_id, file_name,
-#                                 file_path, file_type, file_size,
-#                                 created_by
-#                             )
-#                             VALUES (%s, %s, %s, %s, %s, %s, %s)
-#                         """, (
-#                             attachment_id,
-#                             task_id,
-#                             file_name,
-#                             attachment_path,
-#                             file_type,
-#                             file_size,
-#                             assigned_by
-#                         ))
-#                         logger.info(f"Added attachment: {attachment_id}")
-#                 except Exception as e:
-#                     logger.error(f"Error handling attachment: {str(e)}")
-#                     continue
-
-#         # Handle alarm settings
-#         if alarm_settings:
-#             # Delete existing alarm settings
-#             cursor.execute("""
-#                 DELETE FROM task_alarms
-#                 WHERE task_id = %s
-#             """, (task_id,))
-            
-#             # Insert new alarm settings
-#             alarm_id = str(uuid.uuid4())
-#             cursor.execute("""
-#                 INSERT INTO task_alarms (
-#                     alarm_id, task_id, start_date, start_time,
-#                     frequency, created_by
-#                 )
-#                 VALUES (%s, %s, %s, %s, %s, %s)
-#             """, (
-#                 alarm_id,
-#                 task_id,
-#                 alarm_settings.get('start_date'),
-#                 alarm_settings.get('start_time'),
-#                 alarm_settings.get('frequency'),
-#                 assigned_by
-#             ))
-
-#         conn.commit()
-        
-#         # Notify about task update
-#         try:
-#             notify_task_update({
-#                 'task_id': task_id,
-#                 'title': title,
-#                 'description': description,
-#                 'assigned_to': assigned_to,
-#                 'assigned_by': assigned_by,
-#                 'priority': priority,
-#                 'status': status,
-#                 'deadline': deadline,
-#                 'updated_by': data.get('updated_by')
-#             }, 'task_updated')
-#         except Exception as e:
-#             logger.error(f"Error sending task update notification: {str(e)}")
-        
-#         return jsonify({
-#             'success': True,
-#             'message': 'Task updated successfully',
-#             'task_id': task_id
-#         }), 200
-        
-#     except Exception as e:
-#         if conn:
-#             conn.rollback()
-#         logger.error(f"Error updating task: {str(e)}")
-#         return jsonify({
-#             'success': False,
-#             'message': f"Error updating task: {str(e)}"
-#         }), 500
-#     finally:
-#         if cursor:
-#             cursor.close()
-#         if conn:
-#             conn.close()
-
-
-# ---------------- UPDATE TASK ----------------
 @app.route('/tasks/<task_id>', methods=['PUT'])
+@jwt_required()
 def update_task(task_id):
     conn = None
     cursor = None
     try:
+        # Get user identity from token
+        current_user = get_jwt_identity()
+        logger.info(f"Update task request by user: {current_user} for task: {task_id}")
+        
         data = request.get_json()
+        logger.debug(f"Task update data: {data}")
         
         # Validate required fields
         required_fields = ['title', 'description', 'assigned_to', 'assigned_by', 'priority', 'status', 'deadline','currentUser']
         for field in required_fields:
             if field not in data:
+                logger.warning(f"Missing required field in task update: {field}")
                 return jsonify({
                     'success': False,
                     'message': f'Missing required field: {field}',
@@ -2814,8 +2441,13 @@ def update_fcm_token():
 
 # ---------------- UPLOAD FILE ----------------
 @app.route('/upload', methods=['POST'])
+@jwt_required()
 def upload_file():
     try:
+        # Get user identity from token
+        current_user = get_jwt_identity()
+        logger.info(f"File upload by user: {current_user}")
+        
         if 'files[]' not in request.files:
             return jsonify({
                 'success': False,
