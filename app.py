@@ -55,7 +55,7 @@ load_dotenv()
 
 # Initialize Firebase Admin SDK
 try:
-    # Check if Firebase is already initialized
+    # Check if Firebase credentials are available
     if not os.getenv('FIREBASE_CREDENTIALS'):
         logger.warning("FIREBASE_CREDENTIALS environment variable not set - Firebase features will be disabled")
     else:
@@ -1165,8 +1165,9 @@ def initialize_application():
 
 #--------Initialize Firebase Admin SDK--------
 
-cred = credentials.Certificate(Config.FIREBASE_CREDENTIALS_PATH)
-firebase_admin.initialize_app(cred)
+# Remove or comment out the problematic line
+# cred = credentials.Certificate(Config.FIREBASE_CREDENTIALS_PATH)
+# firebase_admin.initialize_app(cred)
 
 # ---------------- CREATE TASK ----------------
 @app.route('/tasks', methods=['POST'])
