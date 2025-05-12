@@ -784,11 +784,16 @@ def signup():
 # ---------------- LOGIN ----------------
 @app.route('/login', methods=['POST'])
 def login():
+    conn = None
+    cursor = None
     try:
         data = request.get_json()
         username = data.get('username')
         password = data.get('password')
         fcm_token = data.get('fcm_token', '')
+
+        logger.info(f"Login attempt for user: {username}")
+        logger.info(f"FCM token provided: {fcm_token[:20]}..." if fcm_token else "No FCM token")
 
         if not username or not password:
             return jsonify({'message': 'Missing username or password'}), 400
@@ -802,45 +807,85 @@ def login():
             (username,)
         )
         user = cursor.fetchone()
-
-        if not user or not verify_password(password, user['password']):
+        
+        if not user:
+            logger.warning(f"User not found: {username}")
             return jsonify({'message': 'Invalid username or password'}), 401
 
+        if not verify_password(password, user['password']):
+            logger.warning(f"Invalid password for user: {username}")
+            return jsonify({'message': 'Invalid username or password'}), 401
+
+        logger.info(f"User {username} authenticated successfully")
+
         # Generate new tokens
-        access_token, refresh_token = generate_tokens(user)
-        
+        try:
+            tokens = generate_tokens(user)
+            logger.info(f"Generated tokens for user {username}")
+            
+            access_token = tokens['access_token']
+            refresh_token = tokens['refresh_token']
+            expires_in = tokens['expires_in']
+            
+        except Exception as e:
+            logger.error(f"Error generating tokens: {str(e)}")
+            raise
+
         # Calculate token expiry time
-        token_expires_at = datetime.utcnow() + app.config['JWT_ACCESS_TOKEN_EXPIRES']
+        token_expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
 
-        # Update user with new tokens
-        cursor.execute("""
-            UPDATE users 
-            SET access_token = %s,
-                refresh_token = %s,
-                token_expires_at = %s,
-                fcm_token = COALESCE(%s, fcm_token)
-            WHERE username = %s
-        """, (
-            access_token,
-            refresh_token,
-            token_expires_at,
-            fcm_token if fcm_token else None,
-            username
-        ))
+        try:
+            # Update user with new tokens
+            update_query = """
+                UPDATE users 
+                SET access_token = %s,
+                    refresh_token = %s,
+                    token_expires_at = %s,
+                    fcm_token = COALESCE(%s, fcm_token)
+                WHERE username = %s
+            """
+            logger.info(f"Executing update query for user {username}")
+            logger.debug(f"Query: {update_query}")
+            
+            cursor.execute(update_query, (
+                access_token,
+                refresh_token,
+                token_expires_at,
+                fcm_token if fcm_token else None,
+                username
+            ))
+            
+            if cursor.rowcount == 0:
+                logger.error(f"No rows updated for user {username}")
+                raise Exception("Failed to update user tokens")
 
-        conn.commit()
+            conn.commit()
+            logger.info(f"Successfully updated tokens for user {username}")
+
+        except Exception as e:
+            logger.error(f"Database error updating tokens: {str(e)}")
+            if conn:
+                conn.rollback()
+            raise
 
         return jsonify({
             'user_id': user['user_id'],
             'username': user['username'],
             'role': user['role'],
             'access_token': access_token,
-            'refresh_token': refresh_token
+            'refresh_token': refresh_token,
+            'expires_in': expires_in
         }), 200
 
     except Exception as e:
-        logger.error(f"Login error: {str(e)}")
-        return jsonify({'message': 'An error occurred during login'}), 500
+        logger.error(f"Login error for user {username if 'username' in locals() else 'unknown'}: {str(e)}")
+        logger.exception("Full traceback:")
+        return jsonify({'message': f'An error occurred during login: {str(e)}'}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 @app.route('/refresh_token', methods=['POST'])
 @jwt_required(refresh=True)
@@ -865,10 +910,17 @@ def refresh_token():
             return jsonify({'message': 'Invalid or expired refresh token'}), 401
 
         # Generate new tokens
-        new_access_token, new_refresh_token = generate_tokens(user)
+        try:
+            tokens = generate_tokens(user)
+            new_access_token = tokens['access_token']
+            new_refresh_token = tokens['refresh_token']
+            expires_in = tokens['expires_in']
+        except Exception as e:
+            logger.error(f"Error generating refresh tokens: {str(e)}")
+            raise
         
         # Calculate new expiry time
-        token_expires_at = datetime.utcnow() + app.config['JWT_ACCESS_TOKEN_EXPIRES']
+        token_expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
 
         # Update user with new tokens
         cursor.execute("""
@@ -888,7 +940,8 @@ def refresh_token():
 
         return jsonify({
             'access_token': new_access_token,
-            'refresh_token': new_refresh_token
+            'refresh_token': new_refresh_token,
+            'expires_in': expires_in
         }), 200
 
     except Exception as e:
@@ -3037,3 +3090,14 @@ if __name__ == '__main__':
     # Run the server using socketio.run() with eventlet
     print(f'Server starting on http://0.0.0.0:{port} in {env} mode')
     socketio.run(app, host='0.0.0.0', port=port, debug=(env == 'development')) 
+
+def verify_password(provided_password, stored_password):
+    """Verify a password against its stored hash"""
+    try:
+        # For now, we're using a simple hash comparison
+        # In production, you should use a proper password hashing library like bcrypt
+        hashed = hashlib.sha256(provided_password.encode()).hexdigest()
+        return hashed == stored_password
+    except Exception as e:
+        logger.error(f"Error verifying password: {str(e)}")
+        return False
