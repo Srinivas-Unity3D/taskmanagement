@@ -30,7 +30,6 @@ import hashlib
 from config.config import Config
 import firebase_admin
 from functools import wraps
-import schedule
 
 def verify_password(provided_password, stored_password):
     """Verify the hashed password."""
