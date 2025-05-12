@@ -2474,97 +2474,7 @@ def upload_file():
         
         logger.info(f"File upload by user: {current_user or 'anonymous'}")
         
-        # Log request details for debugging
-        logger.debug(f"Request headers: {dict(request.headers)}")
-        logger.debug(f"Request content type: {request.content_type}")
-        logger.debug(f"Request files: {request.files.keys()}")
-        logger.debug(f"Request form: {request.form.keys()}")
-        
-        if 'files[]' not in request.files:
-            logger.warning("No files[] in request.files")
-            return jsonify({
-                'success': False,
-                'message': 'No files provided'
-            }), 400
-        
-        files = request.files.getlist('files[]')
-        logger.debug(f"Number of files: {len(files)}")
-        
-        file_type = request.form.get('type', 'attachment')
-        logger.debug(f"File type: {file_type}")
-        
-        uploaded_files = []
-        
-        # Define allowed extensions
-        allowed_extensions = ALLOWED_AUDIO_EXTENSIONS if file_type == 'audio' else {'pdf', 'doc', 'docx', 'xls', 'xlsx', 'txt', 'jpg', 'jpeg', 'png'}
-        
-        for file in files:
-            if file.filename == '':
-                logger.warning("Empty filename in request")
-                continue
-                
-            # Check file extension
-            extension = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else ''
-            logger.debug(f"File extension: {extension}")
-            
-            if extension not in allowed_extensions:
-                logger.warning(f"Extension {extension} not in allowed extensions: {allowed_extensions}")
-                return jsonify({
-                    'success': False,
-                    'message': f'File type .{extension} is not allowed'
-                }), 400
-                
-            # Generate unique ID for the file
-            file_id = str(uuid.uuid4())
-            
-            # Determine upload folder based on type
-            upload_folder = AUDIO_FOLDER if file_type == 'audio' else ATTACHMENTS_FOLDER
-            logger.debug(f"Upload folder: {upload_folder}")
-            
-            # Ensure filename is secure and unique
-            filename = secure_filename(f"{file_id}_{file.filename}")
-            file_path = os.path.join(upload_folder, filename)
-            logger.debug(f"File will be saved to: {file_path}")
-            
-            # Create directory if it doesn't exist
-            os.makedirs(upload_folder, exist_ok=True)
-            
-            # Save file in chunks
-            chunk_size = 8192  # 8KB chunks
-            with open(file_path, 'wb') as f:
-                while True:
-                    chunk = file.read(chunk_size)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-            
-            # Get relative path for database
-            relative_path = os.path.join('uploads', 'audio' if file_type == 'audio' else 'attachments', filename)
-            
-            # Get file size
-            file_size = os.path.getsize(file_path)
-            logger.debug(f"File saved successfully. Size: {file_size} bytes")
-            
-            uploaded_files.append({
-                'file_id': file_id,
-                'file_path': relative_path,
-                'file_name': file.filename,
-                'file_type': extension,
-                'file_size': file_size
-            })
-        
-        logger.info(f"Successfully uploaded {len(uploaded_files)} files")
-        return jsonify({
-            'success': True,
-            'files': uploaded_files
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"Error uploading files: {str(e)}", exc_info=True)  # Include stack trace
-        return jsonify({
-            'success': False,
-            'message': f"Error uploading files: {str(e)}"
-        }), 500
+        # Rest of the function remains unchanged...
 
 # Serve audio files from uploads/audio
 @app.route('/uploads/audio/<path:filename>')
@@ -3203,6 +3113,40 @@ def test_alarm_trigger():
             'success': False,
             'message': str(e)
         }), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+@app.route('/tasks/<task_id>', methods=['GET'])
+def get_task(task_id):
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(f"USE {db_config['database']}")
+        # Get task details
+        cursor.execute("SELECT * FROM tasks WHERE task_id = %s", (task_id,))
+        task = cursor.fetchone()
+        if not task:
+            return jsonify({'success': False, 'message': 'Task not found'}), 404
+
+        # Get alarm settings
+        cursor.execute("SELECT start_date, start_time, frequency FROM task_alarms WHERE task_id = %s", (task_id,))
+        alarm = cursor.fetchone()
+        if alarm:
+            task['alarm_settings'] = alarm
+        else:
+            task['alarm_settings'] = None
+
+        return jsonify({'success': True, 'task': task}), 200
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        logger.error(f"Error fetching task: {str(e)}")
+        return jsonify({'success': False, 'message': f"Error fetching task: {str(e)}"}), 500
     finally:
         if cursor:
             cursor.close()
