@@ -1,3 +1,7 @@
+# Apply gevent monkey patching first
+from gevent import monkey
+monkey.patch_all()
+
 from flask import Flask, request, jsonify, send_file, Response, send_from_directory
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager, get_jwt_identity, jwt_required
@@ -20,6 +24,9 @@ import threading
 import pytz  # Add this import at the top
 import requests
 from auth import generate_tokens, jwt_token_required, role_required
+import sys
+import hashlib
+import gevent  # Import gevent for the SocketIO async mode
 
 # Setup logging
 logging.basicConfig(
@@ -341,8 +348,8 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 socketio = SocketIO(
     app,
     cors_allowed_origins="*",
-    async_mode='threading',  # Changed to threading to avoid eventlet issues with Python 3.12
-    ping_timeout=60,
+    async_mode='gevent',  # Changed from threading to gevent for better compatibility
+    ping_timeout=120,     # Increased from 60 to allow more time for slow connections
     ping_interval=25,
     logger=True,
     engineio_logger=True,
@@ -368,23 +375,32 @@ def validate_request():
 @socketio.on_error()
 def error_handler(e):
     logger.error(f"SocketIO error: {str(e)}")
+    logger.exception("Socket error traceback:")
     return {'error': str(e)}
 
 @socketio.on_error_default
 def default_error_handler(e):
     logger.error(f"SocketIO default error: {str(e)}")
+    logger.exception("Socket default error traceback:")
     return {'error': str(e)}
 
 # Initialize connected users dictionary
 connected_users = {}
+last_heartbeat = {}  # Track last heartbeat for each connection
 
 @socketio.on('connect')
 def handle_connect():
     try:
-        logger.info(f"Client connected: {request.sid}")
+        sid = request.sid
+        logger.info(f"Client connected: {sid}")
+        # Add client IP logging for debugging
+        logger.info(f"Client IP: {request.remote_addr}")
+        # Store initial heartbeat timestamp
+        last_heartbeat[sid] = time.time()
         return True
     except Exception as e:
         logger.error(f"Error in handle_connect: {str(e)}")
+        logger.exception("Full traceback:")
         return False
 
 @socketio.on('disconnect')
@@ -406,10 +422,25 @@ def handle_disconnect():
             logger.info(f"User {username_to_remove} disconnected")
             del connected_users[username_to_remove]
         
+        # Clean up heartbeat tracking
+        if sid in last_heartbeat:
+            del last_heartbeat[sid]
+            
         logger.info(f"Client disconnected: {sid}")
         logger.info(f"Current connected users: {connected_users}")
     except Exception as e:
         logger.error(f"Error in handle_disconnect: {str(e)}")
+        logger.exception("Full traceback:")
+
+@socketio.on('heartbeat')
+def handle_heartbeat():
+    try:
+        sid = request.sid
+        last_heartbeat[sid] = time.time()
+        return {'status': 'ok', 'timestamp': time.time()}
+    except Exception as e:
+        logger.error(f"Error in handle_heartbeat: {str(e)}")
+        return {'status': 'error', 'message': str(e)}
 
 @socketio.on('register')
 def handle_register(data):
@@ -421,7 +452,19 @@ def handle_register(data):
             return
         
         logger.info(f"Registering user {username} with sid {request.sid}")
+        
+        # Check if user is already registered with a different sid
+        if username in connected_users and connected_users[username] != request.sid:
+            old_sid = connected_users[username]
+            logger.info(f"User {username} already registered with sid {old_sid}, updating to {request.sid}")
+            
+            # Clean up old heartbeat if exists
+            if old_sid in last_heartbeat:
+                del last_heartbeat[old_sid]
+        
         connected_users[username] = request.sid
+        last_heartbeat[request.sid] = time.time()
+        
         logger.info(f"Current connected users: {connected_users}")
         
         socketio.emit('register_response', {
@@ -431,6 +474,7 @@ def handle_register(data):
         }, room=request.sid)
     except Exception as e:
         logger.error(f"Error in handle_register: {str(e)}")
+        logger.exception("Full traceback:")
 
 # Add timezone configuration
 DEFAULT_TIMEZONE = 'Asia/Kolkata'  # Change this to your default timezone
@@ -2867,18 +2911,53 @@ if __name__ == '__main__':
     # Initialize the application
     initialize_application()
     
-    # Run the server with gevent
-    from gevent import pywsgi
-    from geventwebsocket.handler import WebSocketHandler
+    # Add a periodic task to check for stale connections
+    def check_stale_connections():
+        try:
+            current_time = time.time()
+            stale_sids = []
+            
+            for sid, last_time in list(last_heartbeat.items()):
+                if current_time - last_time > 300:  # 5 minutes without heartbeat
+                    stale_sids.append(sid)
+            
+            # Clean up stale connections
+            for sid in stale_sids:
+                logger.info(f"Removing stale connection: {sid}")
+                
+                # Find and remove username
+                for username, connected_sid in list(connected_users.items()):
+                    if connected_sid == sid:
+                        logger.info(f"Removing stale user: {username}")
+                        del connected_users[username]
+                
+                # Remove from heartbeat tracking
+                if sid in last_heartbeat:
+                    del last_heartbeat[sid]
+        except Exception as e:
+            logger.error(f"Error in check_stale_connections: {str(e)}")
+            logger.exception("Full traceback:")
+
+    # Schedule the stale connection check to run periodically
+    def start_heartbeat_checker():
+        import threading
+        
+        def run_checker():
+            while True:
+                time.sleep(60)  # Check every minute
+                check_stale_connections()
+        
+        checker_thread = threading.Thread(target=run_checker, daemon=True)
+        checker_thread.start()
+        logger.info("Started heartbeat checker thread")
+
+    # Start the heartbeat checker before server starts
+    start_heartbeat_checker()
     
     # Set port based on environment
     env = os.getenv('FLASK_ENV', 'production')
     port = 5001 if env == 'development' else 5000
     
-    server = pywsgi.WSGIServer(
-        ('0.0.0.0', port),
-        app,
-        handler_class=WebSocketHandler
-    )
+    # Run the server using socketio.run() which is better for gevent mode
     print(f'Server starting on http://0.0.0.0:{port} in {env} mode')
-    server.serve_forever() 
+    socketio.run(app, host='0.0.0.0', port=port, debug=(env == 'development')) 
