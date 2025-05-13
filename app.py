@@ -81,16 +81,22 @@ load_dotenv()
 try:
     # Check if Firebase credentials are available
     if not os.getenv('FIREBASE_CREDENTIALS'):
-        logger.warning("FIREBASE_CREDENTIALS environment variable not set - Firebase features will be disabled")
+        logger.error("FIREBASE_CREDENTIALS environment variable not set - Firebase features will be disabled")
+        raise ValueError("FIREBASE_CREDENTIALS environment variable not set")
     else:
         # Parse the credentials from environment variable
         cred_dict = json.loads(os.getenv('FIREBASE_CREDENTIALS'))
         cred = credentials.Certificate(cred_dict)
-        initialize_app(cred)
-        logger.info("Firebase Admin SDK initialized successfully")
+        # Check if Firebase is already initialized
+        try:
+            firebase_admin.get_app()
+            logger.info("Firebase Admin SDK already initialized")
+        except ValueError:
+            firebase_admin.initialize_app(cred)
+            logger.info("Firebase Admin SDK initialized successfully")
 except Exception as e:
-    logger.warning(f"Firebase initialization skipped: {str(e)}")
-    # Don't raise the error, just log it and continue
+    logger.error(f"Firebase initialization failed: {str(e)}")
+    raise  # Re-raise the exception to prevent the app from starting without Firebase
 
 # Configure upload folder
 UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')

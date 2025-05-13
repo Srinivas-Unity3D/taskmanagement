@@ -14,6 +14,11 @@ StandardOutput=syslog
 StandardError=syslog
 SyslogIdentifier=task_alarm_service
 Environment=PYTHONUNBUFFERED=1
+Environment=FIREBASE_CREDENTIALS=%s
+Environment=DB_HOST=134.209.149.12
+Environment=DB_USER=root
+Environment=DB_PASSWORD=123
+Environment=DB_NAME=task_db
 
 [Install]
 WantedBy=multi-user.target 

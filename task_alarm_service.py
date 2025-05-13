@@ -123,37 +123,45 @@ def get_pending_alarms():
 
 def calculate_next_trigger_time(alarm):
     """Calculate the next trigger time based on frequency"""
-    if not alarm['last_triggered']:
-        # If never triggered, use start date and time
-        start_datetime_str = f"{alarm['start_date']} {alarm['start_time']}"
-        start_datetime = datetime.datetime.strptime(start_datetime_str, '%Y-%m-%d %H:%M:%S')
-        return start_datetime
-    
-    # Convert last_triggered to datetime
-    last_triggered = datetime.datetime.strptime(
-        alarm['last_triggered'], '%Y-%m-%d %H:%M:%S'
-    )
-    
-    # Calculate next trigger time based on frequency
-    frequency = alarm['frequency']
-    
-    if frequency == '30 minutes':
-        next_trigger = last_triggered + datetime.timedelta(minutes=30)
-    elif frequency == '1 hour':
-        next_trigger = last_triggered + datetime.timedelta(hours=1)
-    elif frequency == '2 hours':
-        next_trigger = last_triggered + datetime.timedelta(hours=2)
-    elif frequency == '4 hours':
-        next_trigger = last_triggered + datetime.timedelta(hours=4)
-    elif frequency == '6 hours':
-        next_trigger = last_triggered + datetime.timedelta(hours=6)
-    elif frequency == '8 hours':
-        next_trigger = last_triggered + datetime.timedelta(hours=8)
-    else:
-        # Default to 1 hour if frequency is not recognized
-        next_trigger = last_triggered + datetime.timedelta(hours=1)
-    
-    return next_trigger
+    try:
+        if not alarm['last_triggered']:
+            # If never triggered, use start date and time
+            start_datetime_str = f"{alarm['start_date']} {alarm['start_time']}"
+            start_datetime = datetime.datetime.strptime(start_datetime_str, '%Y-%m-%d %H:%M:%S')
+            logger.info(f"First trigger time calculated: {start_datetime}")
+            return start_datetime
+        
+        # Convert last_triggered to datetime
+        last_triggered = datetime.datetime.strptime(
+            alarm['last_triggered'], '%Y-%m-%d %H:%M:%S'
+        )
+        
+        # Calculate next trigger time based on frequency
+        frequency = alarm['frequency']
+        logger.info(f"Calculating next trigger time for frequency: {frequency}")
+        
+        if frequency == '30 minutes':
+            next_trigger = last_triggered + datetime.timedelta(minutes=30)
+        elif frequency == '1 hour':
+            next_trigger = last_triggered + datetime.timedelta(hours=1)
+        elif frequency == '2 hours':
+            next_trigger = last_triggered + datetime.timedelta(hours=2)
+        elif frequency == '4 hours':
+            next_trigger = last_triggered + datetime.timedelta(hours=4)
+        elif frequency == '6 hours':
+            next_trigger = last_triggered + datetime.timedelta(hours=6)
+        elif frequency == '8 hours':
+            next_trigger = last_triggered + datetime.timedelta(hours=8)
+        else:
+            # Default to 1 hour if frequency is not recognized
+            logger.warning(f"Unrecognized frequency: {frequency}, defaulting to 1 hour")
+            next_trigger = last_triggered + datetime.timedelta(hours=1)
+        
+        logger.info(f"Next trigger time calculated: {next_trigger}")
+        return next_trigger
+    except Exception as e:
+        logger.error(f"Error calculating next trigger time: {str(e)}")
+        raise
 
 def update_alarm_status(alarm_id, last_triggered, next_trigger):
     """Update alarm status after triggering"""
@@ -257,29 +265,35 @@ def process_pending_alarms():
     logger.info(f"Found {len(alarms)} pending alarms to process")
     
     for alarm in alarms:
-        logger.info(f"Processing alarm ID: {alarm['alarm_id']} for task: {alarm['task_title']}")
-        
-        # Send notification
-        notification_sent = send_alarm_notification(alarm)
-        
-        if notification_sent:
-            # Calculate next trigger time
-            now = datetime.datetime.now()
-            next_trigger = calculate_next_trigger_time(alarm)
+        try:
+            logger.info(f"Processing alarm ID: {alarm['alarm_id']} for task: {alarm['task_title']}")
+            logger.info(f"Alarm details: start_date={alarm['start_date']}, start_time={alarm['start_time']}, frequency={alarm['frequency']}")
             
-            # Update alarm status
-            updated = update_alarm_status(alarm['alarm_id'], now, next_trigger)
+            # Send notification
+            notification_sent = send_alarm_notification(alarm)
             
-            if updated:
-                logger.info(f"Alarm ID: {alarm['alarm_id']} processed successfully. Next trigger: {next_trigger}")
+            if notification_sent:
+                # Calculate next trigger time
+                now = datetime.datetime.now()
+                next_trigger = calculate_next_trigger_time(alarm)
+                
+                # Update alarm status
+                updated = update_alarm_status(alarm['alarm_id'], now, next_trigger)
+                
+                if updated:
+                    logger.info(f"Alarm ID: {alarm['alarm_id']} processed successfully. Next trigger: {next_trigger}")
+                else:
+                    logger.error(f"Failed to update alarm ID: {alarm['alarm_id']}")
             else:
-                logger.error(f"Failed to update alarm ID: {alarm['alarm_id']}")
-        else:
-            logger.error(f"Failed to send notification for alarm ID: {alarm['alarm_id']}")
+                logger.error(f"Failed to send notification for alarm ID: {alarm['alarm_id']}")
+        except Exception as e:
+            logger.error(f"Error processing alarm {alarm['alarm_id']}: {str(e)}")
+            continue
 
 # --- APScheduler integration ---
 def start_scheduler():
     scheduler = BackgroundScheduler()
+    # Run every minute to check for pending alarms
     scheduler.add_job(process_pending_alarms, 'interval', minutes=1, id='alarm_job', replace_existing=True)
     scheduler.start()
     logger.info('APScheduler started for task alarms.')
