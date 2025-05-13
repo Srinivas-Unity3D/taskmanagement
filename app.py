@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 import base64
 import io
 from werkzeug.utils import secure_filename
+from werkzeug.security import check_password_hash, generate_password_hash
 import shutil
 from firebase_admin import messaging, initialize_app, credentials
 import time
@@ -832,7 +833,28 @@ def login():
         if user:
             logger.debug(f"Stored password: {user['password']}")  # Be careful with this in production
 
-        if not user or not verify_password(password, user['password']):
+        # Check if user exists and password matches
+        if not user:
+            logger.warning(f"User not found: {username}")
+            return jsonify({'message': 'Invalid username or password'}), 401
+
+        # Try both hashed and plain text password verification
+        password_valid = False
+        if user['password'].startswith('pbkdf2:sha256:'):  # Check if password is hashed
+            password_valid = check_password_hash(user['password'], password)
+        else:  # Plain text password (for backward compatibility)
+            password_valid = (user['password'] == password)
+            # If password matches and is plain text, hash it for future use
+            if password_valid:
+                hashed_password = generate_password_hash(password)
+                cursor.execute(
+                    "UPDATE users SET password = %s WHERE user_id = %s",
+                    (hashed_password, user['user_id'])
+                )
+                conn.commit()
+                logger.info(f"Updated plain text password to hashed for user: {username}")
+
+        if not password_valid:
             logger.warning(f"Invalid password for user: {username}")
             return jsonify({'message': 'Invalid username or password'}), 401
 
