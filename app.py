@@ -1,6 +1,6 @@
 # Apply eventlet monkey patching first
-import eventlet
-eventlet.monkey_patch()
+from gevent import monkey
+monkey.patch_all()
 
 from flask import Flask, request, jsonify, send_file, Response, send_from_directory, current_app, g
 from flask_cors import CORS
