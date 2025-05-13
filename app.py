@@ -793,6 +793,57 @@ def initialize_application():
 def home():
     return "API is running. Use /tasks or /create_task"
 
+print("Registering /trigger_alarm_test route")
+@app.route('/trigger_alarm_test', methods=['GET'])
+def trigger_alarm_test():
+    username = request.args.get('username')
+    if not username:
+        return jsonify({'success': False, 'message': 'username required'}), 400
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(f"USE {db_config['database']}")
+
+        # Get user FCM token
+        cursor.execute("SELECT fcm_token FROM users WHERE username = %s", (username,))
+        user = cursor.fetchone()
+        if not user or not user['fcm_token']:
+            return jsonify({'success': False, 'message': 'User or FCM token not found'}), 404
+
+        # Dummy task info for testing
+        task_title = "Test Alarm"
+        task_description = "This is a test alarm triggered from the browser."
+        task_id = "test-alarm-id"
+
+        # Build FCM message
+        message = messaging.Message(
+            notification=messaging.Notification(
+                title=f"Task Alarm: {task_title}",
+                body=task_description
+            ),
+            data={
+                "type": "task_alarm",
+                "task_id": task_id,
+                "title": task_title,
+                "immediate_alarm": "true"
+            },
+            token=user['fcm_token']
+        )
+
+        # Send FCM
+        response = messaging.send(message)
+        return jsonify({'success': True, 'message': 'Alarm triggered', 'fcm_response': response}), 200
+
+    except Exception as e:
+        logger.error(f"Error in trigger_alarm_test: {str(e)}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+    finally:
+        if 'cursor' in locals():
+            cursor.close()
+        if 'conn' in locals():
+            conn.close()
+
 # ---------------- SIGNUP ----------------
 @app.route('/signup', methods=['POST'])
 def signup():
@@ -2742,57 +2793,6 @@ def get_task(task_id):
 def serve_audio(filename):
     return send_from_directory(AUDIO_FOLDER, filename)
 
-
-@app.route('/trigger_alarm_test', methods=['GET'])
-def trigger_alarm_test():
-    username = request.args.get('username')
-    if not username:
-        return jsonify({'success': False, 'message': 'username required'}), 400
-
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute(f"USE {db_config['database']}")
-
-        # Get user FCM token
-        cursor.execute("SELECT fcm_token FROM users WHERE username = %s", (username,))
-        user = cursor.fetchone()
-        if not user or not user['fcm_token']:
-            return jsonify({'success': False, 'message': 'User or FCM token not found'}), 404
-
-        # Dummy task info for testing
-        task_title = "Test Alarm"
-        task_description = "This is a test alarm triggered from the browser."
-        task_id = "test-alarm-id"
-
-        # Build FCM message
-        message = messaging.Message(
-            notification=messaging.Notification(
-                title=f"Task Alarm: {task_title}",
-                body=task_description
-            ),
-            data={
-                "type": "task_alarm",
-                "task_id": task_id,
-                "title": task_title,
-                "immediate_alarm": "true"
-            },
-            token=user['fcm_token']
-        )
-
-        # Send FCM
-        response = messaging.send(message)
-        return jsonify({'success': True, 'message': 'Alarm triggered', 'fcm_response': response}), 200
-
-    except Exception as e:
-        logger.error(f"Error in trigger_alarm_test: {str(e)}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-    finally:
-        if 'cursor' in locals():
-            cursor.close()
-        if 'conn' in locals():
-            conn.close()
-
 # ---------------- MAIN ----------------
 if __name__ == '__main__':
     # Initialize the application
@@ -2837,4 +2837,8 @@ if __name__ == '__main__':
     # Run the server using socketio.run() with eventlet
     print(f'Server starting on http://0.0.0.0:{port} in {env} mode')
     socketio.run(app, host='0.0.0.0', port=port, debug=(env == 'development'))
+
+# Print all registered routes for debugging
+for rule in app.url_map.iter_rules():
+    print(f"Registered route: {rule}")
 
