@@ -85,7 +85,7 @@ try:
         raise ValueError("FIREBASE_CREDENTIALS environment variable not set")
     else:
         # Parse the credentials from environment variable
-        cred_dict = json.loads(os.getenv('FIREBASE_CREDENTIALS'))
+        with open("firebase-credentials.json") as f: cred_dict = json.load(f)
         cred = credentials.Certificate(cred_dict)
         # Check if Firebase is already initialized
         try:
