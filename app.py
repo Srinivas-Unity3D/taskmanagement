@@ -2838,7 +2838,7 @@ if __name__ == '__main__':
     print(f'Server starting on http://0.0.0.0:{port} in {env} mode')
     socketio.run(app, host='0.0.0.0', port=port, debug=(env == 'development'))
 
-# Print all registered routes for debugging
+# Print all registered routes for debugging (always runs, even with Gunicorn)
 for rule in app.url_map.iter_rules():
     print(f"Registered route: {rule}")
 

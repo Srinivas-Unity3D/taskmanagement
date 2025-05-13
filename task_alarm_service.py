@@ -11,6 +11,8 @@ import threading
 import schedule
 import firebase_admin
 from firebase_admin import credentials, messaging
+from apscheduler.schedulers.background import BackgroundScheduler
+from flask import Flask, jsonify
 
 # Load environment variables
 load_dotenv()
@@ -58,6 +60,13 @@ try:
         logger.error("No Firebase credentials found. Notifications will not work.")
 except Exception as e:
     logger.error(f"Error initializing Firebase: {e}")
+
+# Flask app for health check
+health_app = Flask(__name__)
+
+@health_app.route('/health', methods=['GET'])
+def health():
+    return jsonify({'status': 'ok', 'message': 'Task alarm scheduler is running'}), 200
 
 def get_db_connection():
     """Get a database connection"""
@@ -268,24 +277,29 @@ def process_pending_alarms():
         else:
             logger.error(f"Failed to send notification for alarm ID: {alarm['alarm_id']}")
 
-def run_scheduler():
-    """Run the scheduler process"""
-    logger.info("Starting task alarm scheduler...")
-    
-    # Schedule to run every minute
-    schedule.every(1).minutes.do(process_pending_alarms)
-    
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
+# --- APScheduler integration ---
+def start_scheduler():
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(process_pending_alarms, 'interval', minutes=1, id='alarm_job', replace_existing=True)
+    scheduler.start()
+    logger.info('APScheduler started for task alarms.')
+    return scheduler
 
 if __name__ == "__main__":
     try:
-        # Initial check for pending alarms
-        process_pending_alarms()
-        
-        # Start scheduler
-        run_scheduler()
+        # Start the alarm scheduler
+        scheduler = start_scheduler()
+
+        # Start the health check HTTP server in a separate thread
+        def run_health_app():
+            health_app.run(host='0.0.0.0', port=5051)
+        threading.Thread(target=run_health_app, daemon=True).start()
+
+        logger.info('Task alarm service is running. Health check at /health on port 5051.')
+
+        # Keep the main thread alive
+        while True:
+            time.sleep(60)
     except KeyboardInterrupt:
         logger.info("Task alarm service stopped by user")
     except Exception as e:
