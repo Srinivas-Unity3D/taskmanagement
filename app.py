@@ -36,8 +36,32 @@ def verify_password(provided_password, stored_password):
     """Verify the hashed password."""
     if not provided_password or not stored_password:
         return False
-    # Use Werkzeug's check_password_hash function
-    return check_password_hash(stored_password, provided_password)
+    try:
+        # Check if the password is stored in scrypt format
+        if stored_password.startswith('scrypt$'):
+            # Extract parameters from stored password
+            parts = stored_password.split('$')
+            if len(parts) != 4:
+                return False
+            salt = base64.b64decode(parts[2])
+            stored_hash = base64.b64decode(parts[3])
+            
+            # Hash the provided password with the same parameters
+            key = hashlib.scrypt(
+                provided_password.encode(),
+                salt=salt,
+                n=2**14,  # CPU/memory cost parameter
+                r=8,      # Block size parameter
+                p=1,      # Parallelization parameter
+                dklen=32  # Length of the derived key
+            )
+            return key == stored_hash
+        else:
+            # Fallback to Werkzeug's check_password_hash for backward compatibility
+            return check_password_hash(stored_password, provided_password)
+    except Exception as e:
+        logger.error(f"Password verification error: {str(e)}")
+        return False
 
 # Setup logging
 logging.basicConfig(
@@ -817,7 +841,6 @@ def login():
 
         logger.info(f"Login attempt for user: {username}")
         logger.info(f"FCM token provided: {fcm_token[:20]}..." if fcm_token else "No FCM token")
-        logger.debug(f"Received password: {password}")  # Be careful with this in production
 
         if not username or not password:
             return jsonify({'message': 'Missing username or password'}), 400
@@ -833,31 +856,14 @@ def login():
         user = cursor.fetchone()
         
         logger.debug(f"Found user in database: {user is not None}")
-        if user:
-            logger.debug(f"Stored password: {user['password']}")  # Be careful with this in production
 
         # Check if user exists and password matches
         if not user:
             logger.warning(f"User not found: {username}")
             return jsonify({'message': 'Invalid username or password'}), 401
 
-        # Try both hashed and plain text password verification
-        password_valid = False
-        if user['password'].startswith('pbkdf2:sha256:'):  # Check if password is hashed
-            password_valid = check_password_hash(user['password'], password)
-        else:  # Plain text password (for backward compatibility)
-            password_valid = (user['password'] == password)
-            # If password matches and is plain text, hash it for future use
-            if password_valid:
-                hashed_password = generate_password_hash(password)
-                cursor.execute(
-                    "UPDATE users SET password = %s WHERE user_id = %s",
-                    (hashed_password, user['user_id'])
-                )
-                conn.commit()
-                logger.info(f"Updated plain text password to hashed for user: {username}")
-
-        if not password_valid:
+        # Verify password using scrypt
+        if not verify_password(password, user['password']):
             logger.warning(f"Invalid password for user: {username}")
             return jsonify({'message': 'Invalid username or password'}), 401
 
