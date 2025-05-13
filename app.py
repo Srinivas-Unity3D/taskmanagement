@@ -194,7 +194,7 @@ def init_db():
                 )
             """)
 
-            # Create tasks table with optional alarm fields
+            # Create tasks table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS tasks (
                     task_id VARCHAR(36) PRIMARY KEY,
@@ -205,9 +205,6 @@ def init_db():
                     deadline DATETIME NOT NULL,
                     priority ENUM('low', 'medium', 'high', 'urgent') NOT NULL,
                     status ENUM('pending', 'in_progress', 'completed', 'snoozed') NOT NULL DEFAULT 'pending',
-                    start_date DATE,
-                    start_time TIME,
-                    frequency VARCHAR(50),
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                     FOREIGN KEY (assigned_by) REFERENCES users(username) ON DELETE CASCADE ON UPDATE CASCADE,
@@ -275,16 +272,22 @@ def init_db():
                 CREATE TABLE IF NOT EXISTS task_alarms (
                     alarm_id VARCHAR(36) PRIMARY KEY,
                     task_id VARCHAR(36) NOT NULL,
-                    start_date DATE,
-                    start_time TIME,
-                    frequency VARCHAR(50),
-                    next_alarm_time TIME,
+                    start_date DATE NOT NULL,
+                    start_time TIME NOT NULL,
+                    frequency VARCHAR(50) NOT NULL,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    last_triggered TIMESTAMP NULL,
+                    next_trigger TIMESTAMP NOT NULL,
                     acknowledged BOOLEAN DEFAULT FALSE,
                     acknowledged_at TIMESTAMP NULL,
                     created_by VARCHAR(100),
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                     FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE ON UPDATE CASCADE,
-                    FOREIGN KEY (created_by) REFERENCES users(username) ON DELETE SET NULL ON UPDATE CASCADE
+                    FOREIGN KEY (created_by) REFERENCES users(username) ON DELETE SET NULL ON UPDATE CASCADE,
+                    INDEX idx_next_trigger (next_trigger, is_active),
+                    INDEX idx_task_id (task_id),
+                    INDEX idx_is_active (is_active)
                 )
             """)
         except mysql.connector.Error as e:
@@ -1179,6 +1182,12 @@ def create_task():
                     logger.error(f"Invalid frequency: {alarm_settings['frequency']}")
                     raise ValueError(f"Invalid frequency. Must be one of: {valid_frequencies}")
                 
+                # Calculate next trigger time
+                start_datetime = datetime.strptime(
+                    f"{alarm_settings['start_date']} {alarm_settings['start_time']}", 
+                    '%Y-%m-%d %H:%M:%S'
+                )
+                
                 # Generate alarm ID and insert
                 alarm_id = str(uuid.uuid4())
                 cursor.execute("""
@@ -1194,7 +1203,7 @@ def create_task():
                     alarm_settings['start_time'],
                     alarm_settings['frequency'],
                     assigned_by,
-                    f"{alarm_settings['start_date']} {alarm_settings['start_time']}"
+                    start_datetime
                 ))
                 
                 logger.info(f"Successfully created alarm with ID: {alarm_id}")
@@ -1822,28 +1831,71 @@ def update_task(task_id):
 
         # Handle alarm settings
         if alarm_settings:
-            # Delete existing alarm settings
-            cursor.execute("""
-                DELETE FROM task_alarms
-                WHERE task_id = %s
-            """, (task_id,))
-            
-            # Insert new alarm settings
-            alarm_id = str(uuid.uuid4())
-            cursor.execute("""
-                INSERT INTO task_alarms (
-                    alarm_id, task_id, start_date, start_time,
-                    frequency, created_by
+            try:
+                logger.info(f"Processing alarm settings update: {alarm_settings}")
+                
+                # Validate required fields
+                required_fields = ['start_date', 'start_time', 'frequency']
+                missing_fields = [field for field in required_fields if field not in alarm_settings]
+                if missing_fields:
+                    logger.error(f"Missing required alarm fields: {missing_fields}")
+                    raise ValueError(f"Missing required alarm fields: {missing_fields}")
+                
+                # Validate date format
+                try:
+                    datetime.strptime(alarm_settings['start_date'], '%Y-%m-%d')
+                except ValueError:
+                    logger.error(f"Invalid start_date format: {alarm_settings['start_date']}")
+                    raise ValueError("Invalid start_date format. Expected YYYY-MM-DD")
+                
+                # Validate time format
+                try:
+                    datetime.strptime(alarm_settings['start_time'], '%H:%M:%S')
+                except ValueError:
+                    logger.error(f"Invalid start_time format: {alarm_settings['start_time']}")
+                    raise ValueError("Invalid start_time format. Expected HH:MM:SS")
+                
+                # Validate frequency
+                valid_frequencies = ['30 minutes', '1 hour', '2 hours', '4 hours', '6 hours', '8 hours']
+                if alarm_settings['frequency'] not in valid_frequencies:
+                    logger.error(f"Invalid frequency: {alarm_settings['frequency']}")
+                    raise ValueError(f"Invalid frequency. Must be one of: {valid_frequencies}")
+                
+                # Calculate next trigger time
+                start_datetime = datetime.strptime(
+                    f"{alarm_settings['start_date']} {alarm_settings['start_time']}", 
+                    '%Y-%m-%d %H:%M:%S'
                 )
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """, (
-                alarm_id,
-                task_id,
-                alarm_settings.get('start_date'),
-                alarm_settings.get('start_time'),
-                alarm_settings.get('frequency'),
-                assigned_by
-            ))
+                
+                # Delete existing alarm settings
+                cursor.execute("""
+                    DELETE FROM task_alarms
+                    WHERE task_id = %s
+                """, (task_id,))
+                
+                # Insert new alarm settings
+                alarm_id = str(uuid.uuid4())
+                cursor.execute("""
+                    INSERT INTO task_alarms (
+                        alarm_id, task_id, start_date, start_time,
+                        frequency, created_by, is_active, next_trigger
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, TRUE, %s)
+                """, (
+                    alarm_id,
+                    task_id,
+                    alarm_settings['start_date'],
+                    alarm_settings['start_time'],
+                    alarm_settings['frequency'],
+                    assigned_by,
+                    start_datetime
+                ))
+                
+                logger.info(f"Successfully updated alarm with ID: {alarm_id}")
+                
+            except Exception as e:
+                logger.error(f"Error updating alarm: {str(e)}")
+                raise
 
         conn.commit()
         
