@@ -1149,21 +1149,59 @@ def create_task():
 
         # Handle alarm settings
         if alarm_settings:
-            alarm_id = str(uuid.uuid4())
-            cursor.execute("""
-                INSERT INTO task_alarms (
-                    alarm_id, task_id, start_date, start_time,
-                    frequency, created_by
-                )
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """, (
-                alarm_id,
-                task_id,
-                alarm_settings.get('start_date'),
-                alarm_settings.get('start_time'),
-                alarm_settings.get('frequency'),
-                assigned_by
-            ))
+            try:
+                logger.info(f"Processing alarm settings: {alarm_settings}")
+                
+                # Validate required fields
+                required_fields = ['start_date', 'start_time', 'frequency']
+                missing_fields = [field for field in required_fields if field not in alarm_settings]
+                if missing_fields:
+                    logger.error(f"Missing required alarm fields: {missing_fields}")
+                    raise ValueError(f"Missing required alarm fields: {missing_fields}")
+                
+                # Validate date format
+                try:
+                    datetime.strptime(alarm_settings['start_date'], '%Y-%m-%d')
+                except ValueError:
+                    logger.error(f"Invalid start_date format: {alarm_settings['start_date']}")
+                    raise ValueError("Invalid start_date format. Expected YYYY-MM-DD")
+                
+                # Validate time format
+                try:
+                    datetime.strptime(alarm_settings['start_time'], '%H:%M:%S')
+                except ValueError:
+                    logger.error(f"Invalid start_time format: {alarm_settings['start_time']}")
+                    raise ValueError("Invalid start_time format. Expected HH:MM:SS")
+                
+                # Validate frequency
+                valid_frequencies = ['30 minutes', '1 hour', '2 hours', '4 hours', '6 hours', '8 hours']
+                if alarm_settings['frequency'] not in valid_frequencies:
+                    logger.error(f"Invalid frequency: {alarm_settings['frequency']}")
+                    raise ValueError(f"Invalid frequency. Must be one of: {valid_frequencies}")
+                
+                # Generate alarm ID and insert
+                alarm_id = str(uuid.uuid4())
+                cursor.execute("""
+                    INSERT INTO task_alarms (
+                        alarm_id, task_id, start_date, start_time,
+                        frequency, created_by, is_active, next_trigger
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, TRUE, %s)
+                """, (
+                    alarm_id,
+                    task_id,
+                    alarm_settings['start_date'],
+                    alarm_settings['start_time'],
+                    alarm_settings['frequency'],
+                    assigned_by,
+                    f"{alarm_settings['start_date']} {alarm_settings['start_time']}"
+                ))
+                
+                logger.info(f"Successfully created alarm with ID: {alarm_id}")
+                
+            except Exception as e:
+                logger.error(f"Error creating alarm: {str(e)}")
+                raise
 
         conn.commit()
         
