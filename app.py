@@ -864,12 +864,24 @@ def signup():
             return jsonify({'message': 'User already exists'}), 409
 
         user_id = str(uuid.uuid4())
+        # Hash the password using scrypt
+        salt = os.urandom(16)
+        hashed = hashlib.scrypt(
+            data['password'].encode(),
+            salt=salt,
+            n=2**14,
+            r=8,
+            p=1,
+            dklen=32
+        )
+        password_hash = f"scrypt$16384$" + base64.b64encode(salt).decode() + "$" + base64.b64encode(hashed).decode()
+
         cursor.execute("""
             INSERT INTO users (user_id, username, email, phone, password, role, fcm_token, timezone)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             user_id, data['username'], data['email'], data['phone'],
-            data['password'], data['role'], data.get('fcm_token', ''), data.get('timezone', DEFAULT_TIMEZONE)
+            password_hash, data['role'], data.get('fcm_token', ''), data.get('timezone', DEFAULT_TIMEZONE)
         ))
         conn.commit()
         return jsonify({'message': 'Signup successful'}), 200
