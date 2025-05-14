@@ -193,7 +193,7 @@ def ist_to_utc(dt_ist):
         dt_ist = dt_ist.astimezone(IST)
     else:
         dt_ist = dt_ist.replace(tzinfo=IST)
-    return dt_ist.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+    return dt_ist.astimezone(timezone.utc).replace(tzinfo=None)
 
 def update_alarm_status(alarm_id, last_triggered, next_trigger):
     """Update alarm status after triggering"""
