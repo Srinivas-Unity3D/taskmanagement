@@ -93,11 +93,18 @@ def get_pending_alarms():
         logger.info(f"Current UTC time: {now}")
         logger.info(f"Current IST time: {ist_now}")
         logger.info(f"Checking for alarms with: date={ist_date}, time={ist_time}")
-        # ... debug queries ...
+        
+        # Query with stronger filtering to prevent duplicate alarms
+        # and explicitly select all needed fields including assigned_by
         query = """
         SELECT 
             a.*,
-            t.title as task_title, t.description as task_description,
+            t.title as task_title, 
+            t.description as task_description,
+            t.assigned_by, 
+            t.assignee_name,
+            t.due_date,
+            DATE_FORMAT(t.due_date, '%Y-%m-%d') as formatted_due_date,
             u.fcm_token
         FROM 
             task_alarms a
@@ -108,7 +115,8 @@ def get_pending_alarms():
         WHERE 
             a.is_active = 1 
             AND (
-                (a.next_trigger IS NOT NULL AND a.next_trigger <= %s AND (a.last_triggered IS NULL OR a.last_triggered < DATE_SUB(%s, INTERVAL 5 MINUTE)))
+                /* Check both date and time for scheduled alarms */
+                (a.next_trigger IS NOT NULL AND a.next_trigger <= %s AND (a.last_triggered IS NULL OR a.last_triggered < DATE_SUB(%s, INTERVAL 15 MINUTE)))
                 OR 
                 (a.next_trigger IS NULL AND a.last_triggered IS NULL AND (
                     a.start_date < %s 
@@ -116,16 +124,46 @@ def get_pending_alarms():
                 ))
             )
             AND u.fcm_token IS NOT NULL
+            AND NOT EXISTS (
+                SELECT 1 FROM task_alarms_processed
+                WHERE alarm_id = a.alarm_id
+                AND processed_at > DATE_SUB(%s, INTERVAL 15 MINUTE)
+            )
         """
         logger.info(f"Executing query with params: datetime={ist_datetime}, date={ist_date}, time={ist_time}")
-        cursor.execute(query, (ist_datetime, ist_datetime, ist_date, ist_date, ist_time))
+        cursor.execute(query, (ist_datetime, ist_datetime, ist_date, ist_date, ist_time, ist_datetime))
         alarms = cursor.fetchall()
+        
         if alarms:
             logger.info(f"Found {len(alarms)} pending alarms")
+            # Create the processed alarms table if it doesn't exist
+            try:
+                cursor.execute("""
+                CREATE TABLE IF NOT EXISTS task_alarms_processed (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    alarm_id VARCHAR(255) NOT NULL,
+                    processed_at DATETIME NOT NULL,
+                    INDEX (alarm_id, processed_at)
+                )
+                """)
+                conn.commit()
+            except Exception as e:
+                logger.error(f"Error creating processed alarms table: {e}")
+            
             for alarm in alarms:
-                logger.info(f"Alarm details: ID={alarm['alarm_id']}, Task={alarm['task_title']}, Next trigger={alarm['next_trigger']}")
+                logger.info(f"Alarm details: ID={alarm['alarm_id']}, Task={alarm['task_title']}, Assigned by={alarm['assigned_by']}, Next trigger={alarm['next_trigger']}")
+                # Mark this alarm as processed to prevent duplicate processing
+                try:
+                    cursor.execute(
+                        "INSERT INTO task_alarms_processed (alarm_id, processed_at) VALUES (%s, %s)",
+                        (alarm['alarm_id'], ist_datetime)
+                    )
+                    conn.commit()
+                except Exception as e:
+                    logger.error(f"Error marking alarm as processed: {e}")
         else:
             logger.info("No pending alarms found")
+        
         cursor.close()
         conn.close()
         return alarms
@@ -249,6 +287,49 @@ def send_alarm_notification(alarm):
         # Log that we're sending an alarm
         logger.info(f"Sending alarm notification for task: {alarm['task_id']} with FCM token: {alarm['fcm_token'][:10]}...")
         
+        # Get assigned by and due date information directly from task record
+        assigned_by = alarm.get('assigned_by')
+        if not assigned_by:
+            try:
+                conn = get_db_connection()
+                if conn:
+                    cursor = conn.cursor(dictionary=True)
+                    cursor.execute("""
+                        SELECT assigned_by FROM tasks WHERE task_id = %s
+                    """, (alarm['task_id'],))
+                    result = cursor.fetchone()
+                    cursor.close()
+                    conn.close()
+                    if result and result.get('assigned_by'):
+                        assigned_by = result['assigned_by']
+                        logger.info(f"Retrieved assigned_by from database: {assigned_by}")
+                    else:
+                        logger.warning(f"No assigned_by found for task {alarm['task_id']}")
+                        assigned_by = 'Unknown'
+            except Exception as e:
+                logger.error(f"Error retrieving assigned_by: {e}")
+                assigned_by = 'Unknown'
+        
+        # Format the due date properly
+        due_date = ''
+        if alarm.get('formatted_due_date'):
+            due_date = alarm['formatted_due_date']
+        elif alarm.get('due_date'):
+            # Try to format the date if it's not already formatted
+            try:
+                if isinstance(alarm['due_date'], str):
+                    due_date = alarm['due_date']
+                else:
+                    due_date = alarm['due_date'].strftime('%Y-%m-%d')
+            except Exception as e:
+                logger.error(f"Error formatting due date: {e}")
+                due_date = str(alarm['due_date']) if alarm['due_date'] else ''
+        
+        # Get assignee name
+        assignee_name = alarm.get('assignee_name', 'You')
+        
+        logger.info(f"Task details: assigned_by={assigned_by}, due_date={due_date}, assignee_name={assignee_name}")
+        
         # Use the messaging module from Firebase Admin SDK
         try:
             # Create the notification message
@@ -262,6 +343,9 @@ def send_alarm_notification(alarm):
                     "task_id": alarm['task_id'],
                     "alarm_id": alarm['alarm_id'],
                     "title": alarm['task_title'],
+                    "assigned_by": assigned_by,
+                    "due_date": due_date,
+                    "assignee_name": assignee_name,
                     "click_action": "FLUTTER_NOTIFICATION_CLICK"
                 },
                 android=messaging.AndroidConfig(
@@ -324,6 +408,25 @@ def process_pending_alarms():
             logger.info(f"Processing alarm ID: {alarm_id} for task: {task_title}")
             logger.info(f"Alarm details: start_date={alarm['start_date']}, start_time={alarm['start_time']}, frequency={alarm['frequency']}")
             
+            # Check if this alarm has been processed recently
+            conn = get_db_connection()
+            if conn:
+                try:
+                    cursor = conn.cursor(dictionary=True)
+                    cursor.execute("""
+                        SELECT COUNT(*) as count FROM task_alarms_processed 
+                        WHERE alarm_id = %s AND processed_at > DATE_SUB(NOW(), INTERVAL 15 MINUTE)
+                    """, (alarm_id,))
+                    result = cursor.fetchone()
+                    cursor.close()
+                    conn.close()
+                    
+                    if result and result.get('count', 0) > 1:
+                        logger.info(f"Alarm ID {alarm_id} was processed recently, skipping duplicate processing")
+                        continue
+                except Exception as e:
+                    logger.error(f"Error checking recent alarm processing: {e}")
+            
             # Send notification
             logger.info(f"Sending notification for alarm ID: {alarm_id}")
             notification_sent = send_alarm_notification(alarm)
@@ -364,10 +467,9 @@ def process_pending_alarms():
 # --- APScheduler integration ---
 def start_scheduler():
     scheduler = BackgroundScheduler()
-    # Run every minute to check for pending alarms
     scheduler.add_job(process_pending_alarms, 'interval', minutes=1, id='alarm_job', replace_existing=True)
     scheduler.start()
-    logger.info('APScheduler started for task alarms.')
+    logger.info('APScheduler started for task alarms - checking every minutes')
     return scheduler
 
 if __name__ == "__main__":
