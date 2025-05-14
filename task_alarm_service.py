@@ -108,7 +108,7 @@ def get_pending_alarms():
         WHERE 
             a.is_active = 1 
             AND (
-                (a.next_trigger IS NOT NULL AND a.next_trigger <= %s AND (a.last_triggered IS NULL OR a.last_triggered < DATE_SUB(%s, INTERVAL 1 MINUTE)))
+                (a.next_trigger IS NOT NULL AND a.next_trigger <= %s AND (a.last_triggered IS NULL OR a.last_triggered < DATE_SUB(%s, INTERVAL 5 MINUTE)))
                 OR 
                 (a.next_trigger IS NULL AND a.last_triggered IS NULL AND (
                     a.start_date < %s 
