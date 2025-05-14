@@ -5,7 +5,6 @@ import logging
 import os
 import json
 import requests
-import datetime
 from dotenv import load_dotenv
 import threading
 import schedule
@@ -91,7 +90,7 @@ def get_pending_alarms():
         if not conn:
             return []
         cursor = conn.cursor(dictionary=True)
-        now = datetime.datetime.utcnow()
+        now = datetime.utcnow()
         now_str = now.strftime('%Y-%m-%d %H:%M:%S')
         logger.info(f"Current UTC time: {now}")
         logger.info(f"Checking for alarms with: next_trigger <= {now_str}")
@@ -152,13 +151,13 @@ def calculate_next_trigger_time(alarm):
             else:
                 start_time_str = start_time.strftime('%H:%M:%S')
             start_datetime_str = f"{start_date_str} {start_time_str}"
-            start_datetime = datetime.datetime.strptime(start_datetime_str, '%Y-%m-%d %H:%M:%S')
+            start_datetime = datetime.strptime(start_datetime_str, '%Y-%m-%d %H:%M:%S')
             logger.info(f"First trigger time calculated: {start_datetime}")
             return start_datetime
         # Convert last_triggered to datetime
         last_triggered = alarm['last_triggered']
         if isinstance(last_triggered, str):
-            last_triggered_dt = datetime.datetime.strptime(
+            last_triggered_dt = datetime.strptime(
                 last_triggered, '%Y-%m-%d %H:%M:%S'
             )
         else:
@@ -167,21 +166,21 @@ def calculate_next_trigger_time(alarm):
         frequency = alarm['frequency']
         logger.info(f"Calculating next trigger time for frequency: {frequency}")
         if frequency == '30 minutes':
-            next_trigger = last_triggered_dt + datetime.timedelta(minutes=30)
+            next_trigger = last_triggered_dt + timedelta(minutes=30)
         elif frequency == '1 hour':
-            next_trigger = last_triggered_dt + datetime.timedelta(hours=1)
+            next_trigger = last_triggered_dt + timedelta(hours=1)
         elif frequency == '2 hours':
-            next_trigger = last_triggered_dt + datetime.timedelta(hours=2)
+            next_trigger = last_triggered_dt + timedelta(hours=2)
         elif frequency == '4 hours':
-            next_trigger = last_triggered_dt + datetime.timedelta(hours=4)
+            next_trigger = last_triggered_dt + timedelta(hours=4)
         elif frequency == '6 hours':
-            next_trigger = last_triggered_dt + datetime.timedelta(hours=6)
+            next_trigger = last_triggered_dt + timedelta(hours=6)
         elif frequency == '8 hours':
-            next_trigger = last_triggered_dt + datetime.timedelta(hours=8)
+            next_trigger = last_triggered_dt + timedelta(hours=8)
         else:
             # Default to 1 hour if frequency is not recognized
             logger.warning(f"Unrecognized frequency: {frequency}, defaulting to 1 hour")
-            next_trigger = last_triggered_dt + datetime.timedelta(hours=1)
+            next_trigger = last_triggered_dt + timedelta(hours=1)
         logger.info(f"Next trigger time calculated: {next_trigger}")
         return next_trigger
     except Exception as e:
@@ -395,27 +394,27 @@ def process_pending_alarms():
                 logger.info(f"Notification sent successfully for alarm ID: {alarm_id}")
                 
                 # Calculate next trigger time based on frequency
-                now = datetime.datetime.utcnow()
+                now = datetime.utcnow()
                 last_triggered = now
                 frequency = alarm.get('frequency') or alarm.get('alarm_frequency')
                 next_trigger = None
                 if frequency:
                     if frequency == '30 minutes':
-                        next_trigger = now + datetime.timedelta(minutes=30)
+                        next_trigger = now + timedelta(minutes=30)
                     elif frequency == '1 hour':
-                        next_trigger = now + datetime.timedelta(hours=1)
+                        next_trigger = now + timedelta(hours=1)
                     elif frequency == '2 hours':
-                        next_trigger = now + datetime.timedelta(hours=2)
+                        next_trigger = now + timedelta(hours=2)
                     elif frequency == '4 hours':
-                        next_trigger = now + datetime.timedelta(hours=4)
+                        next_trigger = now + timedelta(hours=4)
                     elif frequency == '6 hours':
-                        next_trigger = now + datetime.timedelta(hours=6)
+                        next_trigger = now + timedelta(hours=6)
                     elif frequency == '8 hours':
-                        next_trigger = now + datetime.timedelta(hours=8)
+                        next_trigger = now + timedelta(hours=8)
                     elif frequency == '12 hours':
-                        next_trigger = now + datetime.timedelta(hours=12)
+                        next_trigger = now + timedelta(hours=12)
                     elif frequency == 'Daily':
-                        next_trigger = now + datetime.timedelta(days=1)
+                        next_trigger = now + timedelta(days=1)
                 # If user updated alarm, next_trigger should already be set in DB and will be picked up next time
                 if next_trigger:
                     logger.info(f"Calculated next trigger time: {next_trigger} for alarm ID: {alarm_id}")
