@@ -83,85 +83,17 @@ def get_pending_alarms():
         conn = get_db_connection()
         if not conn:
             return []
-            
         cursor = conn.cursor(dictionary=True)
-        
-        # Get current date and time in UTC
         now = datetime.datetime.now(datetime.timezone.utc)
-        
-        # Convert UTC to IST (UTC+5:30)
         ist_offset = datetime.timedelta(hours=5, minutes=30)
         ist_now = now + ist_offset
-        
-        # Format date and time components for the query
         ist_date = ist_now.strftime('%Y-%m-%d')
         ist_time = ist_now.strftime('%H:%M:%S')
         ist_datetime = ist_now.strftime('%Y-%m-%d %H:%M:%S')
-        
         logger.info(f"Current UTC time: {now}")
         logger.info(f"Current IST time: {ist_now}")
         logger.info(f"Checking for alarms with: date={ist_date}, time={ist_time}")
-        
-        # Let's run a debug query first to see what alarms exist
-        debug_query = """
-        SELECT 
-            a.alarm_id, a.task_id, a.start_date, a.start_time, 
-            a.is_active, a.next_trigger, a.last_triggered
-        FROM 
-            task_alarms a
-        WHERE 
-            a.is_active = 1
-        LIMIT 5
-        """
-        cursor.execute(debug_query)
-        active_alarms = cursor.fetchall()
-        
-        if active_alarms:
-            logger.info(f"Found {len(active_alarms)} active alarms in database (debug query)")
-            for alarm in active_alarms:
-                logger.info(f"Debug alarm: ID={alarm['alarm_id']}, Date={alarm['start_date']}, Time={alarm['start_time']}, Next={alarm['next_trigger']}, Last={alarm['last_triggered']}")
-        else:
-            logger.info("No active alarms found in database (debug query)")
-        
-        # Try a simpler query to see if we can find ANY alarms that should be triggered
-        test_query = """
-        SELECT 
-            a.alarm_id, a.task_id, a.start_date, a.start_time, 
-            a.is_active, a.next_trigger, a.last_triggered, a.user_id
-        FROM 
-            task_alarms a
-        WHERE 
-            a.is_active = 1
-            AND a.last_triggered IS NULL
-            AND a.start_date <= %s
-        ORDER BY a.start_date DESC, a.start_time DESC
-        LIMIT 3
-        """
-        
-        cursor.execute(test_query, (ist_date,))
-        test_alarms = cursor.fetchall()
-        
-        if test_alarms:
-            logger.info(f"TEST QUERY: Found {len(test_alarms)} alarms that SHOULD be triggered!")
-            for alarm in test_alarms:
-                logger.info(f"TEST ALARM: ID={alarm['alarm_id']}, Date={alarm['start_date']}, Time={alarm['start_time']}, User={alarm['user_id']}")
-                
-                # Try to check if this user has FCM token
-                user_query = """
-                SELECT fcm_token FROM users WHERE user_id = %s
-                """
-                cursor.execute(user_query, (alarm['user_id'],))
-                user_result = cursor.fetchone()
-                if user_result and user_result['fcm_token']:
-                    logger.info(f"User has FCM token: {user_result['fcm_token'][:10]}...")
-                else:
-                    logger.info(f"User does not have FCM token configured!")
-        else:
-            logger.info("TEST QUERY: No alarms found that should be triggered")
-        
-        # Query for alarms that should be triggered now (using IST time)
-        # Check both next_trigger AND start_date/start_time combinations
-        # Also find past alarms that haven't been triggered yet
+        # ... debug queries ...
         query = """
         SELECT 
             a.*,
@@ -176,7 +108,7 @@ def get_pending_alarms():
         WHERE 
             a.is_active = 1 
             AND (
-                (a.next_trigger IS NOT NULL AND a.next_trigger <= %s)
+                (a.next_trigger IS NOT NULL AND a.next_trigger <= %s AND (a.last_triggered IS NULL OR a.last_triggered < DATE_SUB(%s, INTERVAL 1 MINUTE)))
                 OR 
                 (a.next_trigger IS NULL AND a.last_triggered IS NULL AND (
                     a.start_date < %s 
@@ -185,24 +117,17 @@ def get_pending_alarms():
             )
             AND u.fcm_token IS NOT NULL
         """
-        
-        # Log the query and parameters for debugging
         logger.info(f"Executing query with params: datetime={ist_datetime}, date={ist_date}, time={ist_time}")
-        
-        # Use IST time for the query
-        cursor.execute(query, (ist_datetime, ist_date, ist_date, ist_time))
+        cursor.execute(query, (ist_datetime, ist_datetime, ist_date, ist_date, ist_time))
         alarms = cursor.fetchall()
-        
         if alarms:
             logger.info(f"Found {len(alarms)} pending alarms")
             for alarm in alarms:
                 logger.info(f"Alarm details: ID={alarm['alarm_id']}, Task={alarm['task_title']}, Next trigger={alarm['next_trigger']}")
         else:
             logger.info("No pending alarms found")
-        
         cursor.close()
         conn.close()
-        
         return alarms
     except mysql.connector.Error as e:
         logger.error(f"Error getting pending alarms: {str(e)}")
@@ -416,6 +341,18 @@ def process_pending_alarms():
                 
                 if updated:
                     logger.info(f"Alarm ID: {alarm_id} processed successfully. Next trigger: {next_trigger}")
+                    # Confirm DB update
+                    try:
+                        conn = get_db_connection()
+                        if conn:
+                            cursor = conn.cursor(dictionary=True)
+                            cursor.execute("SELECT last_triggered, next_trigger FROM task_alarms WHERE alarm_id = %s", (alarm_id,))
+                            row = cursor.fetchone()
+                            logger.info(f"DB check for alarm {alarm_id}: last_triggered={row['last_triggered']}, next_trigger={row['next_trigger']}")
+                            cursor.close()
+                            conn.close()
+                    except Exception as e:
+                        logger.error(f"Error confirming DB update for alarm {alarm_id}: {e}")
                 else:
                     logger.error(f"Failed to update alarm ID: {alarm_id}")
             else:
