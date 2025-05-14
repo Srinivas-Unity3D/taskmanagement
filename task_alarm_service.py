@@ -94,7 +94,7 @@ def get_pending_alarms():
         logger.info(f"Current IST time: {ist_now}")
         logger.info(f"Checking for alarms with: date={ist_date}, time={ist_time}")
         
-        # Use assigned_to instead of assignee_name
+        # Use deadline instead of due_date
         query = """
         SELECT 
             a.*,
@@ -102,8 +102,8 @@ def get_pending_alarms():
             t.description as task_description,
             t.assigned_by, 
             t.assigned_to,
-            t.due_date,
-            DATE_FORMAT(t.due_date, '%Y-%m-%d') as formatted_due_date,
+            t.deadline,
+            DATE_FORMAT(t.deadline, '%Y-%m-%d') as formatted_deadline,
             u.fcm_token
         FROM 
             task_alarms a
@@ -270,7 +270,7 @@ def send_alarm_notification(alarm):
         # Log that we're sending an alarm
         logger.info(f"Sending alarm notification for task: {alarm['task_id']} with FCM token: {alarm['fcm_token'][:10]}...")
         
-        # Get assigned by and due date information directly from task record
+        # Get assigned by and deadline information directly from task record
         assigned_by = alarm.get('assigned_by')
         if not assigned_by:
             try:
@@ -293,25 +293,25 @@ def send_alarm_notification(alarm):
                 logger.error(f"Error retrieving assigned_by: {e}")
                 assigned_by = 'Unknown'
         
-        # Format the due date properly
-        due_date = ''
-        if alarm.get('formatted_due_date'):
-            due_date = alarm['formatted_due_date']
-        elif alarm.get('due_date'):
+        # Format the deadline properly
+        deadline = ''
+        if alarm.get('formatted_deadline'):
+            deadline = alarm['formatted_deadline']
+        elif alarm.get('deadline'):
             # Try to format the date if it's not already formatted
             try:
-                if isinstance(alarm['due_date'], str):
-                    due_date = alarm['due_date']
+                if isinstance(alarm['deadline'], str):
+                    deadline = alarm['deadline']
                 else:
-                    due_date = alarm['due_date'].strftime('%Y-%m-%d')
+                    deadline = alarm['deadline'].strftime('%Y-%m-%d')
             except Exception as e:
-                logger.error(f"Error formatting due date: {e}")
-                due_date = str(alarm['due_date']) if alarm['due_date'] else ''
+                logger.error(f"Error formatting deadline: {e}")
+                deadline = str(alarm['deadline']) if alarm['deadline'] else ''
         
         # Get assignee name (use assigned_to)
         assignee_name = alarm.get('assigned_to', 'You')
         
-        logger.info(f"Task details: assigned_by={assigned_by}, due_date={due_date}, assignee_name={assignee_name}")
+        logger.info(f"Task details: assigned_by={assigned_by}, deadline={deadline}, assignee_name={assignee_name}")
         
         # Use the messaging module from Firebase Admin SDK
         try:
@@ -327,7 +327,7 @@ def send_alarm_notification(alarm):
                     "alarm_id": alarm['alarm_id'],
                     "title": alarm['task_title'],
                     "assigned_by": assigned_by,
-                    "due_date": due_date,
+                    "deadline": deadline,
                     "assignee_name": assignee_name,
                     "click_action": "FLUTTER_NOTIFICATION_CLICK"
                 },
