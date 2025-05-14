@@ -96,7 +96,7 @@ def get_pending_alarms():
         logger.info(f"Current UTC time: {now}")
         logger.info(f"Current IST time: {ist_now}")
         
-        # Query for alarms that should be triggered now
+        # Query for alarms that should be triggered now (using IST time)
         query = """
         SELECT 
             a.alarm_id, a.task_id, a.user_id, a.start_date, a.start_time, 
@@ -115,7 +115,8 @@ def get_pending_alarms():
             AND u.fcm_token IS NOT NULL
         """
         
-        cursor.execute(query, (now.strftime('%Y-%m-%d %H:%M:%S'),))
+        # Use IST time for the query
+        cursor.execute(query, (ist_now.strftime('%Y-%m-%d %H:%M:%S'),))
         alarms = cursor.fetchall()
         
         if alarms:
