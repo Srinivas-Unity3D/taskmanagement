@@ -1257,11 +1257,12 @@ def create_task():
                     logger.error(f"Invalid frequency: {alarm_settings['frequency']}")
                     raise ValueError(f"Invalid frequency. Must be one of: {valid_frequencies}")
                 
-                # Calculate next trigger time
-                start_datetime = datetime.strptime(
-                    f"{alarm_settings['start_date']} {alarm_settings['start_time']}", 
-                    '%Y-%m-%d %H:%M:%S'
-                )
+                # Calculate next trigger time in UTC
+                start_datetime_str = f"{alarm_settings['start_date']} {alarm_settings['start_time']}"
+                start_datetime = convert_to_utc(start_datetime_str)
+                
+                logger.info(f"Original start datetime (IST): {start_datetime_str}")
+                logger.info(f"Converted to UTC: {start_datetime}")
                 
                 # Generate alarm ID and insert
                 alarm_id = str(uuid.uuid4())
@@ -1936,11 +1937,12 @@ def update_task(task_id):
                     logger.error(f"Invalid frequency: {alarm_settings['frequency']}")
                     raise ValueError(f"Invalid frequency. Must be one of: {valid_frequencies}")
                 
-                # Calculate next trigger time
-                start_datetime = datetime.strptime(
-                    f"{alarm_settings['start_date']} {alarm_settings['start_time']}", 
-                    '%Y-%m-%d %H:%M:%S'
-                )
+                # Calculate next trigger time in UTC
+                start_datetime_str = f"{alarm_settings['start_date']} {alarm_settings['start_time']}"
+                start_datetime = convert_to_utc(start_datetime_str)
+                
+                logger.info(f"Original start datetime (IST): {start_datetime_str}")
+                logger.info(f"Converted to UTC: {start_datetime}")
                 
                 # Delete existing alarm settings
                 cursor.execute("""
@@ -2859,4 +2861,24 @@ if __name__ == '__main__':
 # Print all registered routes for debugging (always runs, even with Gunicorn)
 for rule in app.url_map.iter_rules():
     print(f"Registered route: {rule}")
+
+def convert_to_utc(datetime_str):
+    """Convert a datetime string from IST to UTC"""
+    try:
+        # Parse the datetime string
+        dt = datetime.strptime(datetime_str, '%Y-%m-%d %H:%M:%S')
+        
+        # Create IST timezone (UTC+5:30)
+        ist = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+        
+        # Make the datetime timezone-aware
+        dt = dt.replace(tzinfo=ist)
+        
+        # Convert to UTC
+        utc_dt = dt.astimezone(datetime.timezone.utc)
+        
+        return utc_dt
+    except Exception as e:
+        logger.error(f"Error converting datetime to UTC: {str(e)}")
+        raise
 

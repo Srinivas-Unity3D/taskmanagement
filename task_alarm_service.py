@@ -86,10 +86,15 @@ def get_pending_alarms():
             
         cursor = conn.cursor(dictionary=True)
         
-        # Get current date and time
-        now = datetime.datetime.now()
-        current_date = now.strftime('%Y-%m-%d')
-        current_time = now.strftime('%H:%M:%S')
+        # Get current date and time in UTC
+        now = datetime.datetime.now(datetime.timezone.utc)
+        
+        # Convert UTC to IST (UTC+5:30)
+        ist_offset = datetime.timedelta(hours=5, minutes=30)
+        ist_now = now + ist_offset
+        
+        logger.info(f"Current UTC time: {now}")
+        logger.info(f"Current IST time: {ist_now}")
         
         # Query for alarms that should be triggered now
         query = """
@@ -112,6 +117,13 @@ def get_pending_alarms():
         
         cursor.execute(query, (now.strftime('%Y-%m-%d %H:%M:%S'),))
         alarms = cursor.fetchall()
+        
+        if alarms:
+            logger.info(f"Found {len(alarms)} pending alarms")
+            for alarm in alarms:
+                logger.info(f"Alarm details: ID={alarm['alarm_id']}, Task={alarm['task_title']}, Next trigger={alarm['next_trigger']}")
+        else:
+            logger.info("No pending alarms found")
         
         cursor.close()
         conn.close()
