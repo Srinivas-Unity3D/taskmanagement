@@ -123,8 +123,45 @@ def get_pending_alarms():
         else:
             logger.info("No active alarms found in database (debug query)")
         
+        # Try a simpler query to see if we can find ANY alarms that should be triggered
+        test_query = """
+        SELECT 
+            a.alarm_id, a.task_id, a.start_date, a.start_time, 
+            a.is_active, a.next_trigger, a.last_triggered, a.user_id
+        FROM 
+            task_alarms a
+        WHERE 
+            a.is_active = 1
+            AND a.last_triggered IS NULL
+            AND a.start_date <= %s
+        ORDER BY a.start_date DESC, a.start_time DESC
+        LIMIT 3
+        """
+        
+        cursor.execute(test_query, (ist_date,))
+        test_alarms = cursor.fetchall()
+        
+        if test_alarms:
+            logger.info(f"TEST QUERY: Found {len(test_alarms)} alarms that SHOULD be triggered!")
+            for alarm in test_alarms:
+                logger.info(f"TEST ALARM: ID={alarm['alarm_id']}, Date={alarm['start_date']}, Time={alarm['start_time']}, User={alarm['user_id']}")
+                
+                # Try to check if this user has FCM token
+                user_query = """
+                SELECT fcm_token FROM users WHERE user_id = %s
+                """
+                cursor.execute(user_query, (alarm['user_id'],))
+                user_result = cursor.fetchone()
+                if user_result and user_result['fcm_token']:
+                    logger.info(f"User has FCM token: {user_result['fcm_token'][:10]}...")
+                else:
+                    logger.info(f"User does not have FCM token configured!")
+        else:
+            logger.info("TEST QUERY: No alarms found that should be triggered")
+        
         # Query for alarms that should be triggered now (using IST time)
         # Check both next_trigger AND start_date/start_time combinations
+        # Also find past alarms that haven't been triggered yet
         query = """
         SELECT 
             a.*,
@@ -141,7 +178,10 @@ def get_pending_alarms():
             AND (
                 (a.next_trigger IS NOT NULL AND a.next_trigger <= %s)
                 OR 
-                (a.next_trigger IS NULL AND a.start_date = %s AND a.start_time <= %s)
+                (a.next_trigger IS NULL AND a.last_triggered IS NULL AND (
+                    a.start_date < %s 
+                    OR (a.start_date = %s AND a.start_time <= %s)
+                ))
             )
             AND u.fcm_token IS NOT NULL
         """
@@ -150,7 +190,7 @@ def get_pending_alarms():
         logger.info(f"Executing query with params: datetime={ist_datetime}, date={ist_date}, time={ist_time}")
         
         # Use IST time for the query
-        cursor.execute(query, (ist_datetime, ist_date, ist_time))
+        cursor.execute(query, (ist_datetime, ist_date, ist_date, ist_time))
         alarms = cursor.fetchall()
         
         if alarms:
