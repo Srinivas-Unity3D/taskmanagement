@@ -63,6 +63,26 @@ def verify_password(provided_password, stored_password):
         logger.error(f"Password verification error: {str(e)}")
         return False
 
+def convert_to_utc(datetime_str):
+    """Convert a datetime string from IST to UTC"""
+    try:
+        # Parse the datetime string
+        dt = datetime.strptime(datetime_str, '%Y-%m-%d %H:%M:%S')
+        
+        # Create IST timezone (UTC+5:30)
+        ist = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+        
+        # Make the datetime timezone-aware
+        dt = dt.replace(tzinfo=ist)
+        
+        # Convert to UTC
+        utc_dt = dt.astimezone(datetime.timezone.utc)
+        
+        return utc_dt
+    except Exception as e:
+        logger.error(f"Error converting datetime to UTC: {str(e)}")
+        raise
+
 # Setup logging
 logging.basicConfig(
     level=logging.DEBUG,
@@ -1266,12 +1286,19 @@ def create_task():
                 
                 # Generate alarm ID and insert
                 alarm_id = str(uuid.uuid4())
+                # Look up user_id for assigned_to
+                cursor.execute("SELECT user_id FROM users WHERE username = %s", (assigned_to,))
+                user_row = cursor.fetchone()
+                user_id = user_row['user_id'] if user_row else None
+                if not user_id:
+                    logger.error(f"Could not find user_id for assigned_to: {assigned_to}")
+                    raise ValueError(f"Could not find user_id for assigned_to: {assigned_to}")
                 cursor.execute("""
                     INSERT INTO task_alarms (
                         alarm_id, task_id, start_date, start_time,
-                        frequency, created_by, is_active, next_trigger
+                        frequency, created_by, is_active, next_trigger, user_id
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, TRUE, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, TRUE, %s, %s)
                 """, (
                     alarm_id,
                     task_id,
@@ -1279,11 +1306,10 @@ def create_task():
                     alarm_settings['start_time'],
                     alarm_settings['frequency'],
                     assigned_by,
-                    start_datetime
+                    start_datetime,
+                    user_id
                 ))
-                
-                logger.info(f"Successfully created alarm with ID: {alarm_id}")
-                
+                logger.info(f"Successfully created alarm with ID: {alarm_id} and user_id: {user_id}")
             except Exception as e:
                 logger.error(f"Error creating alarm: {str(e)}")
                 raise
@@ -2813,6 +2839,7 @@ def get_task(task_id):
 def serve_audio(filename):
     return send_from_directory(AUDIO_FOLDER, filename)
 
+
 # ---------------- MAIN ----------------
 if __name__ == '__main__':
     # Initialize the application
@@ -2862,23 +2889,4 @@ if __name__ == '__main__':
 for rule in app.url_map.iter_rules():
     print(f"Registered route: {rule}")
 
-def convert_to_utc(datetime_str):
-    """Convert a datetime string from IST to UTC"""
-    try:
-        # Parse the datetime string
-        dt = datetime.strptime(datetime_str, '%Y-%m-%d %H:%M:%S')
-        
-        # Create IST timezone (UTC+5:30)
-        ist = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
-        
-        # Make the datetime timezone-aware
-        dt = dt.replace(tzinfo=ist)
-        
-        # Convert to UTC
-        utc_dt = dt.astimezone(datetime.timezone.utc)
-        
-        return utc_dt
-    except Exception as e:
-        logger.error(f"Error converting datetime to UTC: {str(e)}")
-        raise
 
