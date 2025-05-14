@@ -12,7 +12,9 @@ import firebase_admin
 from firebase_admin import credentials, messaging
 from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask, jsonify
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
+import pytz
+
 try:
     from zoneinfo import ZoneInfo  # Python 3.9+
     IST = ZoneInfo('Asia/Kolkata')
