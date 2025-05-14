@@ -133,9 +133,9 @@ def get_pending_alarms():
         FROM 
             task_alarms a
         JOIN 
-            tasks t ON a.task_id = t.id
+            tasks t ON a.task_id = t.task_id
         JOIN 
-            users u ON t.user_id = u.id
+            users u ON u.user_id = a.user_id
         WHERE 
             a.is_active = 1 
             AND (
@@ -254,8 +254,8 @@ def send_alarm_notification(alarm):
                     cursor.execute("""
                         SELECT u.fcm_token 
                         FROM users u
-                        JOIN tasks t ON t.user_id = u.id
-                        WHERE t.id = %s
+                        JOIN task_alarms a ON a.user_id = u.user_id
+                        WHERE a.task_id = %s
                     """, (alarm['task_id'],))
                     result = cursor.fetchone()
                     cursor.close()
