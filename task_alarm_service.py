@@ -94,14 +94,14 @@ def get_pending_alarms():
         logger.info(f"Current IST time: {ist_now}")
         logger.info(f"Checking for alarms with: date={ist_date}, time={ist_time}")
         
-        # Simplified query that does not use the task_alarms_processed table
+        # Use assigned_to instead of assignee_name
         query = """
         SELECT 
             a.*,
             t.title as task_title, 
             t.description as task_description,
             t.assigned_by, 
-            t.assignee_name,
+            t.assigned_to,
             t.due_date,
             DATE_FORMAT(t.due_date, '%Y-%m-%d') as formatted_due_date,
             u.fcm_token
@@ -143,7 +143,7 @@ def get_pending_alarms():
         if alarms:
             logger.info(f"Found {len(alarms)} pending alarms")
             for alarm in alarms:
-                logger.info(f"Alarm details: ID={alarm['alarm_id']}, Task={alarm['task_title']}, Assigned by={alarm['assigned_by']}, Next trigger={alarm['next_trigger']}")
+                logger.info(f"Alarm details: ID={alarm['alarm_id']}, Task={alarm['task_title']}, Assigned by={alarm['assigned_by']}, Next trigger={alarm['next_trigger']} (Assigned to: {alarm['assigned_to']})")
         else:
             logger.info("No pending alarms found")
         
@@ -308,8 +308,8 @@ def send_alarm_notification(alarm):
                 logger.error(f"Error formatting due date: {e}")
                 due_date = str(alarm['due_date']) if alarm['due_date'] else ''
         
-        # Get assignee name
-        assignee_name = alarm.get('assignee_name', 'You')
+        # Get assignee name (use assigned_to)
+        assignee_name = alarm.get('assigned_to', 'You')
         
         logger.info(f"Task details: assigned_by={assigned_by}, due_date={due_date}, assignee_name={assignee_name}")
         
