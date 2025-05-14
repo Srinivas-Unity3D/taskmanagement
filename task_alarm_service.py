@@ -213,37 +213,47 @@ def calculate_next_trigger_time(alarm):
     try:
         if not alarm['last_triggered']:
             # If never triggered, use start date and time
-            start_datetime_str = f"{alarm['start_date']} {alarm['start_time']}"
+            start_date = alarm['start_date']
+            start_time = alarm['start_time']
+            if isinstance(start_date, str):
+                start_date_str = start_date
+            else:
+                start_date_str = start_date.strftime('%Y-%m-%d')
+            if isinstance(start_time, str):
+                start_time_str = start_time
+            else:
+                start_time_str = start_time.strftime('%H:%M:%S')
+            start_datetime_str = f"{start_date_str} {start_time_str}"
             start_datetime = datetime.datetime.strptime(start_datetime_str, '%Y-%m-%d %H:%M:%S')
             logger.info(f"First trigger time calculated: {start_datetime}")
             return start_datetime
-        
         # Convert last_triggered to datetime
-        last_triggered = datetime.datetime.strptime(
-            alarm['last_triggered'], '%Y-%m-%d %H:%M:%S'
-        )
-        
+        last_triggered = alarm['last_triggered']
+        if isinstance(last_triggered, str):
+            last_triggered_dt = datetime.datetime.strptime(
+                last_triggered, '%Y-%m-%d %H:%M:%S'
+            )
+        else:
+            last_triggered_dt = last_triggered
         # Calculate next trigger time based on frequency
         frequency = alarm['frequency']
         logger.info(f"Calculating next trigger time for frequency: {frequency}")
-        
         if frequency == '30 minutes':
-            next_trigger = last_triggered + datetime.timedelta(minutes=30)
+            next_trigger = last_triggered_dt + datetime.timedelta(minutes=30)
         elif frequency == '1 hour':
-            next_trigger = last_triggered + datetime.timedelta(hours=1)
+            next_trigger = last_triggered_dt + datetime.timedelta(hours=1)
         elif frequency == '2 hours':
-            next_trigger = last_triggered + datetime.timedelta(hours=2)
+            next_trigger = last_triggered_dt + datetime.timedelta(hours=2)
         elif frequency == '4 hours':
-            next_trigger = last_triggered + datetime.timedelta(hours=4)
+            next_trigger = last_triggered_dt + datetime.timedelta(hours=4)
         elif frequency == '6 hours':
-            next_trigger = last_triggered + datetime.timedelta(hours=6)
+            next_trigger = last_triggered_dt + datetime.timedelta(hours=6)
         elif frequency == '8 hours':
-            next_trigger = last_triggered + datetime.timedelta(hours=8)
+            next_trigger = last_triggered_dt + datetime.timedelta(hours=8)
         else:
             # Default to 1 hour if frequency is not recognized
             logger.warning(f"Unrecognized frequency: {frequency}, defaulting to 1 hour")
-            next_trigger = last_triggered + datetime.timedelta(hours=1)
-        
+            next_trigger = last_triggered_dt + datetime.timedelta(hours=1)
         logger.info(f"Next trigger time calculated: {next_trigger}")
         return next_trigger
     except Exception as e:
