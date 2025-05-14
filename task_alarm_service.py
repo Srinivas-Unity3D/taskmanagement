@@ -94,8 +94,7 @@ def get_pending_alarms():
         logger.info(f"Current IST time: {ist_now}")
         logger.info(f"Checking for alarms with: date={ist_date}, time={ist_time}")
         
-        # Query with stronger filtering to prevent duplicate alarms
-        # and explicitly select all needed fields including assigned_by
+        # Simplified query that still prevents frequent alarms but doesn't filter out valid ones
         query = """
         SELECT 
             a.*,
@@ -115,23 +114,30 @@ def get_pending_alarms():
         WHERE 
             a.is_active = 1 
             AND (
-                /* Check both date and time for scheduled alarms */
-                (a.next_trigger IS NOT NULL AND a.next_trigger <= %s AND (a.last_triggered IS NULL OR a.last_triggered < DATE_SUB(%s, INTERVAL 15 MINUTE)))
+                /* For scheduled alarms with next_trigger set */
+                (
+                    a.next_trigger IS NOT NULL 
+                    AND a.next_trigger <= %s
+                    AND (
+                        a.last_triggered IS NULL 
+                        OR TIME_TO_SEC(TIMEDIFF(%s, a.last_triggered)) > 300  -- At least 5 minutes between triggers
+                    )
+                )
                 OR 
-                (a.next_trigger IS NULL AND a.last_triggered IS NULL AND (
-                    a.start_date < %s 
-                    OR (a.start_date = %s AND a.start_time <= %s)
-                ))
+                /* For first-time alarms that have never triggered */
+                (
+                    a.next_trigger IS NULL 
+                    AND a.last_triggered IS NULL 
+                    AND (
+                        a.start_date < %s 
+                        OR (a.start_date = %s AND a.start_time <= %s)
+                    )
+                )
             )
             AND u.fcm_token IS NOT NULL
-            AND NOT EXISTS (
-                SELECT 1 FROM task_alarms_processed
-                WHERE alarm_id = a.alarm_id
-                AND processed_at > DATE_SUB(%s, INTERVAL 15 MINUTE)
-            )
         """
         logger.info(f"Executing query with params: datetime={ist_datetime}, date={ist_date}, time={ist_time}")
-        cursor.execute(query, (ist_datetime, ist_datetime, ist_date, ist_date, ist_time, ist_datetime))
+        cursor.execute(query, (ist_datetime, ist_datetime, ist_date, ist_date, ist_time))
         alarms = cursor.fetchall()
         
         if alarms:
