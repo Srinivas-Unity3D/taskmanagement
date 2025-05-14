@@ -92,7 +92,9 @@ def get_pending_alarms():
         if not conn:
             return []
         cursor = conn.cursor(dictionary=True)
-        now = datetime.utcnow()
+        
+        # Get current UTC time with timezone info
+        now = datetime.now(timezone.utc)
         now_str = now.strftime('%Y-%m-%d %H:%M:%S')
         logger.info(f"Current UTC time: {now}")
         logger.info(f"Checking for alarms with: next_trigger <= {now_str}")
@@ -191,11 +193,22 @@ def calculate_next_trigger_time(alarm):
 
 # Helper function to convert IST datetime to UTC
 def ist_to_utc(dt_ist):
-    if hasattr(dt_ist, 'tzinfo') and dt_ist.tzinfo is not None:
-        dt_ist = dt_ist.astimezone(IST)
-    else:
-        dt_ist = dt_ist.replace(tzinfo=IST)
-    return dt_ist.astimezone(timezone.utc).replace(tzinfo=None)
+    """Convert a datetime from IST to UTC, ensuring timezone info is preserved"""
+    try:
+        # If it's already timezone-aware
+        if hasattr(dt_ist, 'tzinfo') and dt_ist.tzinfo is not None:
+            # Make sure it's in IST
+            dt_ist = dt_ist.astimezone(IST)
+        else:
+            # Make it timezone-aware in IST
+            dt_ist = dt_ist.replace(tzinfo=IST)
+            
+        # Convert to UTC
+        return dt_ist.astimezone(timezone.utc)
+    except Exception as e:
+        logger.error(f"Error converting IST to UTC: {e}")
+        # Return as is if conversion fails
+        return dt_ist
 
 def update_alarm_status(alarm_id, last_triggered, next_trigger):
     """Update alarm status after triggering"""
@@ -206,9 +219,20 @@ def update_alarm_status(alarm_id, last_triggered, next_trigger):
             
         cursor = conn.cursor()
         
-        # Convert next_trigger from IST to UTC before saving
+        # Make sure we have timezone-aware datetime objects in UTC
+        if hasattr(last_triggered, 'tzinfo') and last_triggered.tzinfo is None:
+            last_triggered = last_triggered.replace(tzinfo=timezone.utc)
+        else:
+            last_triggered = datetime.now(timezone.utc)
+        
+        # Store next_trigger in UTC (don't convert from IST as it should already be in UTC)
+        # Remove timezone info before storing in MySQL
+        last_triggered_utc = last_triggered.astimezone(timezone.utc).replace(tzinfo=None)
+        
         if next_trigger is not None:
-            next_trigger_utc = ist_to_utc(next_trigger)
+            if hasattr(next_trigger, 'tzinfo') and next_trigger.tzinfo is None:
+                next_trigger = next_trigger.replace(tzinfo=timezone.utc)
+            next_trigger_utc = next_trigger.replace(tzinfo=None)
         else:
             next_trigger_utc = None
         
@@ -219,8 +243,8 @@ def update_alarm_status(alarm_id, last_triggered, next_trigger):
         """
         
         cursor.execute(update_query, (
-            last_triggered.strftime('%Y-%m-%d %H:%M:%S'),
-            next_trigger_utc.strftime('%Y-%m-%d %H:%M:%S') if next_trigger_utc else None,
+            last_triggered_utc,
+            next_trigger_utc,
             alarm_id
         ))
         
@@ -396,10 +420,11 @@ def process_pending_alarms():
                 logger.info(f"Notification sent successfully for alarm ID: {alarm_id}")
                 
                 # Calculate next trigger time based on frequency
-                now = datetime.utcnow()
+                now = datetime.now(timezone.utc)
                 last_triggered = now
                 frequency = alarm.get('frequency') or alarm.get('alarm_frequency')
                 next_trigger = None
+                
                 if frequency:
                     if frequency == '30 minutes':
                         next_trigger = now + timedelta(minutes=30)
@@ -417,11 +442,13 @@ def process_pending_alarms():
                         next_trigger = now + timedelta(hours=12)
                     elif frequency == 'Daily':
                         next_trigger = now + timedelta(days=1)
+                        
                 # If user updated alarm, next_trigger should already be set in DB and will be picked up next time
                 if next_trigger:
                     logger.info(f"Calculated next trigger time: {next_trigger} for alarm ID: {alarm_id}")
                 else:
                     logger.info(f"No frequency set, not updating next_trigger for alarm ID: {alarm_id}")
+                
                 # Update alarm status
                 updated = update_alarm_status(alarm_id, last_triggered, next_trigger)
                 
