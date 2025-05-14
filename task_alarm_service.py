@@ -94,7 +94,7 @@ def get_pending_alarms():
         logger.info(f"Current IST time: {ist_now}")
         logger.info(f"Checking for alarms with: date={ist_date}, time={ist_time}")
         
-        # Simplified query that still prevents frequent alarms but doesn't filter out valid ones
+        # Simplified query that does not use the task_alarms_processed table
         query = """
         SELECT 
             a.*,
@@ -142,31 +142,8 @@ def get_pending_alarms():
         
         if alarms:
             logger.info(f"Found {len(alarms)} pending alarms")
-            # Create the processed alarms table if it doesn't exist
-            try:
-                cursor.execute("""
-                CREATE TABLE IF NOT EXISTS task_alarms_processed (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    alarm_id VARCHAR(255) NOT NULL,
-                    processed_at DATETIME NOT NULL,
-                    INDEX (alarm_id, processed_at)
-                )
-                """)
-                conn.commit()
-            except Exception as e:
-                logger.error(f"Error creating processed alarms table: {e}")
-            
             for alarm in alarms:
                 logger.info(f"Alarm details: ID={alarm['alarm_id']}, Task={alarm['task_title']}, Assigned by={alarm['assigned_by']}, Next trigger={alarm['next_trigger']}")
-                # Mark this alarm as processed to prevent duplicate processing
-                try:
-                    cursor.execute(
-                        "INSERT INTO task_alarms_processed (alarm_id, processed_at) VALUES (%s, %s)",
-                        (alarm['alarm_id'], ist_datetime)
-                    )
-                    conn.commit()
-                except Exception as e:
-                    logger.error(f"Error marking alarm as processed: {e}")
         else:
             logger.info("No pending alarms found")
         
@@ -413,25 +390,6 @@ def process_pending_alarms():
                 
             logger.info(f"Processing alarm ID: {alarm_id} for task: {task_title}")
             logger.info(f"Alarm details: start_date={alarm['start_date']}, start_time={alarm['start_time']}, frequency={alarm['frequency']}")
-            
-            # Check if this alarm has been processed recently
-            conn = get_db_connection()
-            if conn:
-                try:
-                    cursor = conn.cursor(dictionary=True)
-                    cursor.execute("""
-                        SELECT COUNT(*) as count FROM task_alarms_processed 
-                        WHERE alarm_id = %s AND processed_at > DATE_SUB(NOW(), INTERVAL 15 MINUTE)
-                    """, (alarm_id,))
-                    result = cursor.fetchone()
-                    cursor.close()
-                    conn.close()
-                    
-                    if result and result.get('count', 0) > 1:
-                        logger.info(f"Alarm ID {alarm_id} was processed recently, skipping duplicate processing")
-                        continue
-                except Exception as e:
-                    logger.error(f"Error checking recent alarm processing: {e}")
             
             # Send notification
             logger.info(f"Sending notification for alarm ID: {alarm_id}")
