@@ -93,10 +93,16 @@ def get_pending_alarms():
         ist_offset = datetime.timedelta(hours=5, minutes=30)
         ist_now = now + ist_offset
         
+        # Format date and time components for the query
+        ist_date = ist_now.strftime('%Y-%m-%d')
+        ist_time = ist_now.strftime('%H:%M:%S')
+        ist_datetime = ist_now.strftime('%Y-%m-%d %H:%M:%S')
+        
         logger.info(f"Current UTC time: {now}")
         logger.info(f"Current IST time: {ist_now}")
         
         # Query for alarms that should be triggered now (using IST time)
+        # Check both next_trigger AND start_date/start_time combinations
         query = """
         SELECT 
             a.alarm_id, a.task_id, a.user_id, a.start_date, a.start_time, 
@@ -111,12 +117,16 @@ def get_pending_alarms():
             users u ON a.user_id = u.user_id
         WHERE 
             a.is_active = 1 
-            AND a.next_trigger <= %s
+            AND (
+                (a.next_trigger IS NOT NULL AND a.next_trigger <= %s)
+                OR 
+                (a.next_trigger IS NULL AND a.start_date = %s AND a.start_time <= %s)
+            )
             AND u.fcm_token IS NOT NULL
         """
         
         # Use IST time for the query
-        cursor.execute(query, (ist_now.strftime('%Y-%m-%d %H:%M:%S'),))
+        cursor.execute(query, (ist_datetime, ist_date, ist_time))
         alarms = cursor.fetchall()
         
         if alarms:
