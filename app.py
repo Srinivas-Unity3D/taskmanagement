@@ -10,7 +10,7 @@ import mysql.connector
 from mysql.connector import pooling
 import uuid
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from flask_socketio import SocketIO, emit
 import json
 import os
@@ -66,18 +66,10 @@ def verify_password(provided_password, stored_password):
 def convert_to_utc(datetime_str):
     """Convert a datetime string from IST to UTC"""
     try:
-        # Parse the datetime string
         dt = datetime.strptime(datetime_str, '%Y-%m-%d %H:%M:%S')
-        
-        # Create IST timezone (UTC+5:30)
-        ist = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
-        
-        # Make the datetime timezone-aware
+        ist = timezone(timedelta(hours=5, minutes=30))
         dt = dt.replace(tzinfo=ist)
-        
-        # Convert to UTC
-        utc_dt = dt.astimezone(datetime.timezone.utc)
-        
+        utc_dt = dt.astimezone(timezone.utc)
         return utc_dt
     except Exception as e:
         logger.error(f"Error converting datetime to UTC: {str(e)}")
