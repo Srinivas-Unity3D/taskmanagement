@@ -100,21 +100,42 @@ def get_pending_alarms():
         
         logger.info(f"Current UTC time: {now}")
         logger.info(f"Current IST time: {ist_now}")
+        logger.info(f"Checking for alarms with: date={ist_date}, time={ist_time}")
+        
+        # Let's run a debug query first to see what alarms exist
+        debug_query = """
+        SELECT 
+            a.alarm_id, a.task_id, a.start_date, a.start_time, 
+            a.is_active, a.next_trigger, a.last_triggered
+        FROM 
+            task_alarms a
+        WHERE 
+            a.is_active = 1
+        LIMIT 5
+        """
+        cursor.execute(debug_query)
+        active_alarms = cursor.fetchall()
+        
+        if active_alarms:
+            logger.info(f"Found {len(active_alarms)} active alarms in database (debug query)")
+            for alarm in active_alarms:
+                logger.info(f"Debug alarm: ID={alarm['alarm_id']}, Date={alarm['start_date']}, Time={alarm['start_time']}, Next={alarm['next_trigger']}, Last={alarm['last_triggered']}")
+        else:
+            logger.info("No active alarms found in database (debug query)")
         
         # Query for alarms that should be triggered now (using IST time)
         # Check both next_trigger AND start_date/start_time combinations
         query = """
         SELECT 
-            a.alarm_id, a.task_id, a.user_id, a.start_date, a.start_time, 
-            a.frequency, a.last_triggered, a.next_trigger, a.is_active,
+            a.*,
             t.title as task_title, t.description as task_description,
             u.fcm_token
         FROM 
             task_alarms a
         JOIN 
-            tasks t ON a.task_id = t.task_id
+            tasks t ON a.task_id = t.id
         JOIN 
-            users u ON a.user_id = u.user_id
+            users u ON t.user_id = u.id
         WHERE 
             a.is_active = 1 
             AND (
@@ -124,6 +145,9 @@ def get_pending_alarms():
             )
             AND u.fcm_token IS NOT NULL
         """
+        
+        # Log the query and parameters for debugging
+        logger.info(f"Executing query with params: datetime={ist_datetime}, date={ist_date}, time={ist_time}")
         
         # Use IST time for the query
         cursor.execute(query, (ist_datetime, ist_date, ist_time))
@@ -219,12 +243,36 @@ def update_alarm_status(alarm_id, last_triggered, next_trigger):
 def send_alarm_notification(alarm):
     """Send FCM notification to user for the alarm using Firebase Admin SDK"""
     try:
-        if not alarm['fcm_token']:
-            logger.warning(f"No FCM token for user ID: {alarm['user_id']}")
-            return False
+        # Double-check if FCM token exists
+        if not alarm.get('fcm_token'):
+            logger.warning(f"No FCM token for alarm ID: {alarm['alarm_id']}, user ID: {alarm.get('user_id', 'unknown')}")
+            # Try to get the FCM token directly from the database as a fallback
+            try:
+                conn = get_db_connection()
+                if conn:
+                    cursor = conn.cursor(dictionary=True)
+                    cursor.execute("""
+                        SELECT u.fcm_token 
+                        FROM users u
+                        JOIN tasks t ON t.user_id = u.id
+                        WHERE t.id = %s
+                    """, (alarm['task_id'],))
+                    result = cursor.fetchone()
+                    cursor.close()
+                    conn.close()
+                    
+                    if result and result.get('fcm_token'):
+                        logger.info(f"Found FCM token from fallback query: {result['fcm_token'][:10]}...")
+                        alarm['fcm_token'] = result['fcm_token']
+                    else:
+                        logger.warning(f"No FCM token found in fallback query for task ID: {alarm['task_id']}")
+                        return False
+            except Exception as e:
+                logger.error(f"Error in FCM token fallback lookup: {e}")
+                return False
         
         # Log that we're sending an alarm
-        logger.info(f"Sending alarm notification for task: {alarm['task_id']} to user: {alarm['user_id']}")
+        logger.info(f"Sending alarm notification for task: {alarm['task_id']} with FCM token: {alarm['fcm_token'][:10]}...")
         
         # Use the messaging module from Firebase Admin SDK
         try:
@@ -289,28 +337,41 @@ def process_pending_alarms():
     
     for alarm in alarms:
         try:
-            logger.info(f"Processing alarm ID: {alarm['alarm_id']} for task: {alarm['task_title']}")
+            # Make sure we have all required alarm data
+            alarm_id = alarm.get('alarm_id')
+            task_id = alarm.get('task_id')
+            task_title = alarm.get('task_title', 'Unknown Task')
+            
+            if not alarm_id or not task_id:
+                logger.error(f"Missing required alarm data: alarm_id={alarm_id}, task_id={task_id}")
+                continue
+                
+            logger.info(f"Processing alarm ID: {alarm_id} for task: {task_title}")
             logger.info(f"Alarm details: start_date={alarm['start_date']}, start_time={alarm['start_time']}, frequency={alarm['frequency']}")
             
             # Send notification
+            logger.info(f"Sending notification for alarm ID: {alarm_id}")
             notification_sent = send_alarm_notification(alarm)
             
             if notification_sent:
+                logger.info(f"Notification sent successfully for alarm ID: {alarm_id}")
+                
                 # Calculate next trigger time
                 now = datetime.datetime.now()
                 next_trigger = calculate_next_trigger_time(alarm)
+                logger.info(f"Calculated next trigger time: {next_trigger} for alarm ID: {alarm_id}")
                 
                 # Update alarm status
-                updated = update_alarm_status(alarm['alarm_id'], now, next_trigger)
+                updated = update_alarm_status(alarm_id, now, next_trigger)
                 
                 if updated:
-                    logger.info(f"Alarm ID: {alarm['alarm_id']} processed successfully. Next trigger: {next_trigger}")
+                    logger.info(f"Alarm ID: {alarm_id} processed successfully. Next trigger: {next_trigger}")
                 else:
-                    logger.error(f"Failed to update alarm ID: {alarm['alarm_id']}")
+                    logger.error(f"Failed to update alarm ID: {alarm_id}")
             else:
-                logger.error(f"Failed to send notification for alarm ID: {alarm['alarm_id']}")
+                logger.error(f"Failed to send notification for alarm ID: {alarm_id}")
         except Exception as e:
-            logger.error(f"Error processing alarm {alarm['alarm_id']}: {str(e)}")
+            logger.error(f"Error processing alarm {alarm.get('alarm_id', 'unknown')}: {str(e)}")
             continue
 
 # --- APScheduler integration ---
