@@ -1236,14 +1236,53 @@ def create_task():
 
         # Handle attachments
         if attachments:
-            for attachment in attachments:
+            logger.info(f"Processing {len(attachments)} attachments for new task: {task_id}")
+            for i, attachment in enumerate(attachments):
                 try:
-                    attachment_id = str(uuid.uuid4())
+                    logger.info(f"Processing attachment {i+1}/{len(attachments)}")
+                    logger.debug(f"Attachment data: {attachment}")
+                    
+                    file_id = attachment.get('file_id')
                     file_data = attachment.get('file_data')
                     file_name = attachment.get('file_name')
                     file_type = attachment.get('file_type')
                     
-                    if file_data and file_name:
+                    logger.info(f"Attachment info - file_id: {file_id}, has_data: {'Yes' if file_data else 'No'}, name: {file_name}, type: {file_type}")
+                    
+                    # Use existing file_id if provided (from previous upload)
+                    if file_id and file_name:
+                        # Use the file_id as attachment_id
+                        attachment_id = file_id
+                        
+                        # Get the file path based on the upload endpoint pattern
+                        attachment_path = os.path.join('uploads', 'attachments', f"{attachment_id}_{file_name}")
+                        logger.info(f"Using pre-uploaded attachment file with ID: {file_id}, path: {attachment_path}")
+                        
+                        # Insert attachment record
+                        cursor.execute("""
+                            INSERT INTO task_attachments (
+                                attachment_id, task_id, file_name,
+                                file_path, file_type, file_size,
+                                created_by
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        """, (
+                            attachment_id,
+                            task_id,
+                            file_name,
+                            attachment_path,
+                            file_type,
+                            0,  # File size unknown but not critical
+                            assigned_by
+                        ))
+                        logger.info(f"Added attachment with existing file_id: {attachment_id}")
+                    
+                    # Handle direct file data if provided instead
+                    elif file_data and file_name:
+                        # Generate a new UUID for this attachment
+                        attachment_id = str(uuid.uuid4())
+                        logger.info(f"Creating new attachment with ID: {attachment_id} for file: {file_name}")
+                        
                         # Save attachment file
                         attachment_path = os.path.join(ATTACHMENTS_FOLDER, f"{attachment_id}_{file_name}")
                         os.makedirs(ATTACHMENTS_FOLDER, exist_ok=True)
@@ -1252,6 +1291,7 @@ def create_task():
                         
                         # Get file size
                         file_size = os.path.getsize(attachment_path)
+                        logger.info(f"Saved attachment file, size: {file_size} bytes")
                         
                         # Insert attachment record
                         cursor.execute("""
@@ -1270,9 +1310,12 @@ def create_task():
                             file_size,
                             assigned_by
                         ))
-                        logger.info(f"Added attachment: {attachment_id}")
+                        logger.info(f"Added attachment with direct data: {attachment_id}")
+                    else:
+                        logger.warning("Attachment missing both file_id and file_data, skipping")
                 except Exception as e:
                     logger.error(f"Error handling attachment: {str(e)}")
+                    logger.exception("Attachment error details:")
                     continue
 
         # Handle alarm settings
@@ -1626,6 +1669,7 @@ def get_users():
 
 # ---------------- GET ATTACHMENT ----------------
 @app.route('/attachments/<attachment_id>', methods=['GET'])
+@jwt_required()
 def get_attachment(attachment_id):
     conn = None
     cursor = None
@@ -1961,14 +2005,53 @@ def update_task(task_id):
 
         # Handle attachments
         if attachments:
-            for attachment in attachments:
+            logger.info(f"Processing {len(attachments)} attachments for task: {task_id}")
+            for i, attachment in enumerate(attachments):
                 try:
-                    attachment_id = str(uuid.uuid4())
+                    logger.info(f"Processing attachment {i+1}/{len(attachments)}")
+                    logger.debug(f"Attachment data: {attachment}")
+                    
+                    file_id = attachment.get('file_id')
                     file_data = attachment.get('file_data')
                     file_name = attachment.get('file_name')
                     file_type = attachment.get('file_type')
                     
-                    if file_data and file_name:
+                    logger.info(f"Attachment info - file_id: {file_id}, has_data: {'Yes' if file_data else 'No'}, name: {file_name}, type: {file_type}")
+                    
+                    # Use existing file_id if provided (from previous upload)
+                    if file_id and file_name:
+                        # Use the file_id as attachment_id
+                        attachment_id = file_id
+                        
+                        # Get the file path based on the upload endpoint pattern
+                        attachment_path = os.path.join('uploads', 'attachments', f"{attachment_id}_{file_name}")
+                        logger.info(f"Using pre-uploaded attachment file with ID: {file_id}, path: {attachment_path}")
+                        
+                        # Insert attachment record
+                        cursor.execute("""
+                            INSERT INTO task_attachments (
+                                attachment_id, task_id, file_name,
+                                file_path, file_type, file_size,
+                                created_by
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        """, (
+                            attachment_id,
+                            task_id,
+                            file_name,
+                            attachment_path,
+                            file_type,
+                            0,  # File size unknown but not critical
+                            assigned_by
+                        ))
+                        logger.info(f"Added attachment with existing file_id: {attachment_id}")
+                    
+                    # Handle direct file data if provided instead
+                    elif file_data and file_name:
+                        # Generate a new UUID for this attachment
+                        attachment_id = str(uuid.uuid4())
+                        logger.info(f"Creating new attachment with ID: {attachment_id} for file: {file_name}")
+                        
                         # Save attachment file
                         attachment_path = os.path.join(ATTACHMENTS_FOLDER, f"{attachment_id}_{file_name}")
                         os.makedirs(ATTACHMENTS_FOLDER, exist_ok=True)
@@ -1977,6 +2060,7 @@ def update_task(task_id):
                         
                         # Get file size
                         file_size = os.path.getsize(attachment_path)
+                        logger.info(f"Saved attachment file, size: {file_size} bytes")
                         
                         # Insert attachment record
                         cursor.execute("""
@@ -1995,9 +2079,12 @@ def update_task(task_id):
                             file_size,
                             assigned_by
                         ))
-                        logger.info(f"Added attachment: {attachment_id}")
+                        logger.info(f"Added attachment with direct data: {attachment_id}")
+                    else:
+                        logger.warning("Attachment missing both file_id and file_data, skipping")
                 except Exception as e:
                     logger.error(f"Error handling attachment: {str(e)}")
+                    logger.exception("Attachment error details:")
                     continue
 
         # Handle alarm settings
@@ -2205,9 +2292,15 @@ def get_task_voice_notes(task_id):
     except Exception as e:
         logger.error(f"Error fetching voice notes: {str(e)}")
         return jsonify({'error': str(e)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 # ---------------- GET TASK ATTACHMENTS ----------------
 @app.route('/tasks/<task_id>/attachments', methods=['GET'])
+@jwt_required()
 def get_task_attachments(task_id):
     conn = None
     cursor = None
@@ -2257,6 +2350,7 @@ def get_task_attachments(task_id):
 
 # ---------------- DOWNLOAD ATTACHMENT ----------------
 @app.route('/attachments/<attachment_id>/download', methods=['GET'])
+@jwt_required()
 def download_attachment(attachment_id):
     conn = None
     cursor = None
@@ -2278,7 +2372,7 @@ def download_attachment(attachment_id):
                 'message': 'Attachment not found or file path is missing'
             }), 404
 
-        file_path = os.path.join(UPLOAD_FOLDER, attachment['file_path'])
+        file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), attachment['file_path'])
         
         if not os.path.exists(file_path):
             return jsonify({
