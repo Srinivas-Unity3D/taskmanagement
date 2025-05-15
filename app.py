@@ -2600,7 +2600,7 @@ def snooze_notification():
         cursor.execute(f"USE {db_config['database']}")
         
         # Get the related task_id from the notification
-        cursor.execute("SELECT task_id FROM task_notifications WHERE id = %s", (notification_id,))
+        cursor.execute("SELECT task_id, title FROM task_notifications WHERE id = %s", (notification_id,))
         notif = cursor.fetchone()
         if not notif or not notif['task_id']:
             return jsonify({'success': False, 'message': 'Notification or related task not found'}), 404
