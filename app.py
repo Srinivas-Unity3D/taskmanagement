@@ -1167,11 +1167,16 @@ def create_task():
         # Handle audio note
         if audio_note:
             try:
+                logger.info(f"Processing audio note for task update: {task_id}")
+                logger.debug(f"Audio note data: {audio_note}")
+                
                 file_id = audio_note.get('file_id')
                 audio_data = audio_note.get('audio_data')
                 duration = audio_note.get('duration', 0)
                 file_name = audio_note.get('filename', 'voice_note.wav')
                 created_by = data.get('updated_by', assigned_by)
+                
+                logger.info(f"Audio note details - file_id: {file_id}, data length: {'Yes' if audio_data else 'No'}, duration: {duration}, filename: {file_name}")
                 
                 # Ensure file extension is .wav
                 if not file_name.lower().endswith('.wav'):
@@ -1185,6 +1190,7 @@ def create_task():
                     audio_id = file_id
                     # The file should already be at this location from the upload endpoint
                     audio_path = os.path.join('uploads', 'audio', f"{audio_id}_{file_name}")
+                    logger.info(f"Using pre-uploaded audio file with ID: {file_id}, path: {audio_path}")
                     
                     # Insert audio note record
                     cursor.execute("""
@@ -1203,6 +1209,8 @@ def create_task():
                     # Save audio file
                     audio_id = str(uuid.uuid4())
                     audio_path = os.path.join(AUDIO_FOLDER, f"{audio_id}_{file_name}")
+                    logger.info(f"Saving direct audio data with new ID: {audio_id}, path: {audio_path}")
+                    
                     os.makedirs(AUDIO_FOLDER, exist_ok=True)
                     with open(audio_path, 'wb') as f:
                         f.write(base64.b64decode(audio_data))
@@ -1218,9 +1226,12 @@ def create_task():
                         audio_id, task_id, audio_path, duration,
                         file_name, created_by, 'normal'
                     ))
-                    logger.info(f"Added audio note: {audio_id}")
+                    logger.info(f"Added audio note with direct data: {audio_id}")
+                else:
+                    logger.warning(f"Audio note provided but missing both file_id and audio_data")
             except Exception as e:
                 logger.error(f"Error handling audio note: {str(e)}")
+                logger.exception("Audio note error details:")
                 raise
 
         # Handle attachments
@@ -1881,15 +1892,50 @@ def update_task(task_id):
         # Handle audio note
         if audio_note:
             try:
-                audio_id = str(uuid.uuid4())
+                logger.info(f"Processing audio note for task update: {task_id}")
+                logger.debug(f"Audio note data: {audio_note}")
+                
+                file_id = audio_note.get('file_id')
                 audio_data = audio_note.get('audio_data')
                 duration = audio_note.get('duration', 0)
                 file_name = audio_note.get('filename', 'voice_note.wav')
                 created_by = data.get('updated_by', assigned_by)
                 
-                if audio_data:
+                logger.info(f"Audio note details - file_id: {file_id}, data length: {'Yes' if audio_data else 'No'}, duration: {duration}, filename: {file_name}")
+                
+                # Ensure file extension is .wav
+                if not file_name.lower().endswith('.wav'):
+                    name_parts = file_name.rsplit('.', 1)
+                    file_name = name_parts[0] + '.wav'
+                    logger.info(f"Changed audio file extension to .wav: {file_name}")
+                
+                # Check if we have a file_id from a previous upload
+                if file_id:
+                    # Use the existing file_id as audio_id
+                    audio_id = file_id
+                    # The file should already be at this location from the upload endpoint
+                    audio_path = os.path.join('uploads', 'audio', f"{audio_id}_{file_name}")
+                    logger.info(f"Using pre-uploaded audio file with ID: {file_id}, path: {audio_path}")
+                    
+                    # Insert audio note record
+                    cursor.execute("""
+                        INSERT INTO task_audio_notes (
+                            audio_id, task_id, file_path, duration, 
+                            file_name, created_by, note_type
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        audio_id, task_id, audio_path, duration,
+                        file_name, created_by, 'normal'
+                    ))
+                    logger.info(f"Added audio note with existing file_id: {audio_id}")
+                
+                elif audio_data:
                     # Save audio file
+                    audio_id = str(uuid.uuid4())
                     audio_path = os.path.join(AUDIO_FOLDER, f"{audio_id}_{file_name}")
+                    logger.info(f"Saving direct audio data with new ID: {audio_id}, path: {audio_path}")
+                    
                     os.makedirs(AUDIO_FOLDER, exist_ok=True)
                     with open(audio_path, 'wb') as f:
                         f.write(base64.b64decode(audio_data))
@@ -1905,9 +1951,12 @@ def update_task(task_id):
                         audio_id, task_id, audio_path, duration,
                         file_name, created_by, 'normal'
                     ))
-                    logger.info(f"Added audio note: {audio_id}")
+                    logger.info(f"Added audio note with direct data: {audio_id}")
+                else:
+                    logger.warning(f"Audio note provided but missing both file_id and audio_data")
             except Exception as e:
                 logger.error(f"Error handling audio note: {str(e)}")
+                logger.exception("Audio note error details:")
                 raise
 
         # Handle attachments
