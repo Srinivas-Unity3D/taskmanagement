@@ -3368,4 +3368,87 @@ def snooze_alarm(task_id):
         if conn:
             conn.close()
 
+# ---------------- ACKNOWLEDGE ALARM ----------------
+@app.route('/tasks/<task_id>/acknowledge_alarm', methods=['POST'])
+@jwt_required()
+def acknowledge_alarm(task_id):
+    conn = None
+    cursor = None
+    try:
+        data = request.get_json()
+        alarm_id = data.get('alarm_id')
+        
+        logger.info(f"Acknowledging alarm {alarm_id} for task {task_id}")
+        
+        if not alarm_id:
+            return jsonify({
+                'success': False,
+                'message': 'Missing required field: alarm_id'
+            }), 400
+            
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        
+        # Get current user info
+        claims = get_jwt()
+        username = claims.get('username', 'Unknown')
+        
+        # Get current task description
+        cursor.execute("SELECT description FROM tasks WHERE task_id = %s", (task_id,))
+        task = cursor.fetchone()
+        if not task:
+            return jsonify({'success': False, 'message': 'Task not found'}), 404
+        
+        # Update the task status to in_progress
+        cursor.execute("""
+            UPDATE tasks SET status = 'in_progress', updated_at = NOW(), updated_by = %s
+            WHERE task_id = %s
+        """, (username, task_id))
+
+        # Update the alarm to mark it as acknowledged
+        cursor.execute("""
+            UPDATE task_alarms 
+            SET is_active = FALSE,
+                acknowledged_at = NOW(),
+                last_updated = NOW()
+            WHERE alarm_id = %s
+        """, (alarm_id,))
+        
+        if cursor.rowcount == 0:
+            return jsonify({
+                'success': False,
+                'message': 'Alarm not found'
+            }), 404
+        
+        conn.commit()
+        
+        # Emit dashboard update event
+        try:
+            notify_task_update({
+                'task_id': task_id,
+                'status': 'in_progress',
+                'updated_by': username
+            }, 'task_updated')
+        except Exception as e:
+            logger.error(f"Error sending dashboard update after alarm acknowledge: {str(e)}")
+        
+        return jsonify({
+            'success': True,
+            'message': 'Alarm acknowledged successfully'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error acknowledging alarm: {str(e)}")
+        if conn:
+            conn.rollback()
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
 
