@@ -2506,6 +2506,75 @@ def snooze_notification():
         except Exception as e:
             logger.error(f"Error sending dashboard update after snooze: {str(e)}")
 
+        try:
+            notify_task_update({
+                'task_id': task_id,
+                'status': 'snoozed',
+                'description': new_description,
+                'updated_by': updated_by
+            }, 'task_snoozed')
+        except Exception as e:
+            logger.error(f"Error sending dashboard update after snooze: {str(e)}")
+
+        # Send FCM notification to updated_by
+        try:
+            cursor.execute(
+            "SELECT fcm_token FROM users WHERE username = (SELECT assigned_by FROM tasks WHERE task_id = %s)",
+            (task_id,)  # ← Note the comma to make it a tuple
+            )
+            result = cursor.fetchone()
+            
+            if not result or not result['fcm_token']:
+                logger.warning(f"No FCM token found for user_id: {updated_by}")
+            else:
+                token = result['fcm_token']
+                # updater_name = result['updater_name']
+                
+                # Truncate description for notification
+                truncated_description = new_description[:80] + "..." if len(new_description) > 80 else new_description
+                
+                # Construct notification message
+                notification_title = f"Task Snoozed: {notif['title']}"
+                notification_body = (
+                    f"{updated_by} has snoozed the task: \"{notif['title']}\". "
+                    f"Description: {truncated_description}. "
+                    f"Snoozed until: {snooze_until}. "
+                    "Please review in the Task Management App."
+                )
+                
+                # Build FCM message
+                message = messaging.Message(
+                    notification=messaging.Notification(
+                        title=notification_title,
+                        body=notification_body
+                    ),
+                    token=token,
+                    data={
+                        'task_id': str(task_id),
+                        'notification_id': str(notification_id),
+                        'status': 'snoozed',
+                        'snooze_until': snooze_until,
+                        'snooze_reason': reason or ''
+                    },
+                    android=messaging.AndroidConfig(
+                        notification=messaging.AndroidNotification(
+                            channel_id='high_importance_channel'
+                        )
+                    )
+                )
+                
+                # Send notification
+                logger.info(f"Sending snooze notification to user_id: {updated_by}, token: {token[:10]}...")
+                response = messaging.send(message)
+                logger.info(f"Notification sent successfully: {response}")
+        
+        except Exception as e:
+            logger.error(f"Error sending snooze notification: {str(e)}")
+            # Continue execution even if notification fails
+
+        conn.commit()
+        
+
         return jsonify({
             'success': True,
             'message': 'Notification snoozed and task updated successfully'
@@ -2604,16 +2673,16 @@ def update_fcm_token():
     cursor = None
     try:
         data = request.get_json()
-        user_id = data.get('user_id')
+        username = data.get('username')
         fcm_token = data.get('fcm_token')
         
-        if not user_id or not fcm_token:
+        if not username or not fcm_token:
             return jsonify({
                 'success': False,
                 'message': 'User ID and FCM token are required'
             }), 400
             
-        logger.info(f"Updating FCM token for user ID: {user_id}")
+        logger.info(f"Updating FCM token for user ID: {username}")
         
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor()
@@ -2621,20 +2690,19 @@ def update_fcm_token():
         
         cursor.execute("""
             UPDATE users 
-            SET fcm_token = %s,
-                updated_at = NOW()
-            WHERE user_id = %s
-        """, (fcm_token, user_id))
+            SET fcm_token = %s
+            WHERE username = %s
+        """, (fcm_token, username))
         
         if cursor.rowcount == 0:
-            logger.warning(f"No user found with ID: {user_id}")
+            logger.warning(f"No user found with ID: {username}")
             return jsonify({
                 'success': False,
                 'message': 'User not found'
             }), 404
             
         conn.commit()
-        logger.info(f"FCM token updated successfully for user ID: {user_id}")
+        logger.info(f"FCM token updated successfully for username: {username}")
         
         return jsonify({
             'success': True,
