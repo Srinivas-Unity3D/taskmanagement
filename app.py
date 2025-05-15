@@ -1167,14 +1167,41 @@ def create_task():
         # Handle audio note
         if audio_note:
             try:
-                audio_id = str(uuid.uuid4())
+                file_id = audio_note.get('file_id')
                 audio_data = audio_note.get('audio_data')
                 duration = audio_note.get('duration', 0)
                 file_name = audio_note.get('filename', 'voice_note.wav')
                 created_by = data.get('updated_by', assigned_by)
                 
-                if audio_data:
+                # Ensure file extension is .wav
+                if not file_name.lower().endswith('.wav'):
+                    name_parts = file_name.rsplit('.', 1)
+                    file_name = name_parts[0] + '.wav'
+                    logger.info(f"Changed audio file extension to .wav: {file_name}")
+                
+                # Check if we have a file_id from a previous upload
+                if file_id:
+                    # Use the existing file_id as audio_id
+                    audio_id = file_id
+                    # The file should already be at this location from the upload endpoint
+                    audio_path = os.path.join('uploads', 'audio', f"{audio_id}_{file_name}")
+                    
+                    # Insert audio note record
+                    cursor.execute("""
+                        INSERT INTO task_audio_notes (
+                            audio_id, task_id, file_path, duration, 
+                            file_name, created_by, note_type
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        audio_id, task_id, audio_path, duration,
+                        file_name, created_by, 'normal'
+                    ))
+                    logger.info(f"Added audio note with existing file_id: {audio_id}")
+                
+                elif audio_data:
                     # Save audio file
+                    audio_id = str(uuid.uuid4())
                     audio_path = os.path.join(AUDIO_FOLDER, f"{audio_id}_{file_name}")
                     os.makedirs(AUDIO_FOLDER, exist_ok=True)
                     with open(audio_path, 'wb') as f:
@@ -2789,6 +2816,14 @@ def upload_file():
                 upload_folder = AUDIO_FOLDER if file_type == 'audio' else ATTACHMENTS_FOLDER
                 logger.debug(f"Upload folder: {upload_folder}")
                 
+                # Ensure audio files use .wav extension
+                if file_type == 'audio' and not file.filename.lower().endswith('.wav'):
+                    original_filename = file.filename
+                    filename_parts = original_filename.rsplit('.', 1)
+                    new_filename = f"{filename_parts[0]}.wav"
+                    logger.info(f"Converting audio file extension: {original_filename} -> {new_filename}")
+                    file.filename = new_filename
+                
                 # Ensure filename is secure and unique
                 filename = secure_filename(f"{file_id}_{file.filename}")
                 file_path = os.path.join(upload_folder, filename)
@@ -2902,6 +2937,57 @@ def get_task(task_id):
 def serve_audio(filename):
     return send_from_directory(AUDIO_FOLDER, filename)
 
+# ---------------- DOWNLOAD AUDIO FILE ----------------
+@app.route('/api/tasks/<task_id>/audio/<audio_id>/download', methods=['GET'])
+@jwt_required()
+def download_audio_file(task_id, audio_id):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(f"USE {db_config['database']}")
+        cursor.execute("""
+            SELECT file_path, file_name 
+            FROM task_audio_notes 
+            WHERE task_id = %s AND audio_id = %s
+        """, (task_id, audio_id))
+        
+        audio = cursor.fetchone()
+        if not audio:
+            return jsonify({
+                'success': False, 
+                'message': 'Audio note not found'
+            }), 404
+            
+        file_path = audio['file_path']
+        file_name = audio['file_name']
+        
+        # Log detailed information for debugging
+        app.logger.info(f"Attempting to serve audio file: {file_path}")
+        app.logger.info(f"Full OS path: {os.path.abspath(file_path)}")
+        
+        if not os.path.exists(file_path):
+            app.logger.error(f"File not found at path: {file_path}")
+            return jsonify({
+                'success': False, 
+                'message': 'Audio file not found on server'
+            }), 404
+            
+        return send_file(
+            file_path, 
+            mimetype="audio/wav", 
+            as_attachment=True,
+            download_name=file_name
+        )
+        
+    except Exception as e:
+        app.logger.error(f"Error serving audio file: {str(e)}")
+        return jsonify({
+            'success': False, 
+            'message': f'Error serving audio file: {str(e)}'
+        }), 500
+    finally:
+        cursor.close()
+        conn.close()
 
 # ---------------- MAIN ----------------
 if __name__ == '__main__':
