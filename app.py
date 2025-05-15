@@ -4,7 +4,7 @@ monkey.patch_all()
 
 from flask import Flask, request, jsonify, send_file, Response, send_from_directory, current_app, g
 from flask_cors import CORS
-from flask_jwt_extended import JWTManager, get_jwt_identity, jwt_required, create_access_token, create_refresh_token
+from flask_jwt_extended import JWTManager, get_jwt_identity, jwt_required, create_access_token, create_refresh_token, get_jwt
 from flask_socketio import SocketIO, join_room, emit, disconnect
 import mysql.connector
 from mysql.connector import pooling
@@ -3180,5 +3180,192 @@ if __name__ == '__main__':
 # Print all registered routes for debugging (always runs, even with Gunicorn)
 for rule in app.url_map.iter_rules():
     print(f"Registered route: {rule}")
+
+# ---------------- SNOOZE ALARM ----------------
+@app.route('/tasks/<task_id>/snooze_alarm', methods=['POST'])
+@jwt_required()
+def snooze_alarm(task_id):
+    conn = None
+    cursor = None
+    try:
+        data = request.get_json()
+        alarm_id = data.get('alarm_id')
+        snooze_until = data.get('snooze_until')
+        reason = data.get('reason', '')
+        audio_note = data.get('audio_note')
+        
+        logger.info(f"Snoozing alarm {alarm_id} for task {task_id} until {snooze_until}")
+        
+        if not alarm_id or not snooze_until:
+            return jsonify({
+                'success': False,
+                'message': 'Missing required fields: alarm_id and snooze_until'
+            }), 400
+            
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        
+        # Get current user info
+        claims = get_jwt()
+        username = claims.get('username', 'Unknown')
+        
+        # Get current task description
+        cursor.execute("SELECT description FROM tasks WHERE task_id = %s", (task_id,))
+        task = cursor.fetchone()
+        if not task:
+            return jsonify({'success': False, 'message': 'Task not found'}), 404
+        old_description = task['description'] or ''
+
+        # Prepare snooze reason with date/time
+        now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        reason_text = f"Snoozed on {now_str}: {reason}" if reason else f"Snoozed on {now_str}"
+        new_description = old_description
+        if reason_text:
+            new_description = (old_description + '\n' if old_description else '') + reason_text
+
+        # Update the task: set status to snoozed, append reason
+        cursor.execute("""
+            UPDATE tasks SET status = 'snoozed', description = %s, updated_at = NOW(), updated_by = %s
+            WHERE task_id = %s
+        """, (new_description, username, task_id))
+
+        # Parse snooze_until as datetime
+        try:
+            snooze_datetime = datetime.fromisoformat(snooze_until.replace('Z', '+00:00'))
+            logger.info(f"Parsed snooze_until as {snooze_datetime}")
+        except Exception as e:
+            logger.error(f"Error parsing snooze_until date: {e}")
+            return jsonify({'success': False, 'message': f'Invalid date format: {e}'}), 400
+        
+        # Update the alarm to set next_trigger to the snooze time
+        cursor.execute("""
+            UPDATE task_alarms 
+            SET next_trigger = %s,
+                last_updated = NOW(),
+                snooze_count = snooze_count + 1
+            WHERE alarm_id = %s
+        """, (snooze_datetime, alarm_id))
+        
+        if cursor.rowcount == 0:
+            return jsonify({
+                'success': False,
+                'message': 'Alarm not found'
+            }), 404
+            
+        # If audio_note is present, save as snooze audio note
+        if audio_note and audio_note.get('audio_data'):
+            audio_id = str(uuid.uuid4())
+            audio_data = audio_note.get('audio_data')
+            duration = audio_note.get('duration', 0)
+            file_name = audio_note.get('filename', 'voice_note.wav')
+            created_by = username
+            audio_path = os.path.join(AUDIO_FOLDER, f"{audio_id}_{file_name}")
+            os.makedirs(AUDIO_FOLDER, exist_ok=True)
+            with open(audio_path, 'wb') as f:
+                f.write(base64.b64decode(audio_data))
+            cursor.execute("""
+                INSERT INTO task_audio_notes (
+                    audio_id, task_id, file_path, duration, 
+                    file_name, created_by, note_type
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (
+                audio_id, task_id, audio_path, duration,
+                file_name, created_by, 'snooze'
+            ))
+
+        conn.commit()
+
+        # Emit dashboard update event (if using SocketIO)
+        try:
+            notify_task_update({
+                'task_id': task_id,
+                'status': 'snoozed',
+                'description': new_description,
+                'updated_by': username
+            }, 'task_snoozed')
+        except Exception as e:
+            logger.error(f"Error sending dashboard update after snooze: {str(e)}")
+            
+        # Send FCM notification to other assignees about this task
+        try:
+            cursor.execute("""
+                SELECT u.fcm_token, u.username
+                FROM users u
+                JOIN task_assignments ta ON u.user_id = ta.user_id 
+                WHERE ta.task_id = %s AND u.username != %s
+            """, (task_id, username))
+            
+            assignees = cursor.fetchall()
+            
+            for assignee in assignees:
+                if not assignee['fcm_token']:
+                    continue
+                    
+                token = assignee['fcm_token']
+                
+                # Truncate description for notification
+                truncated_description = new_description[:80] + "..." if len(new_description) > 80 else new_description
+                
+                # Get task title
+                cursor.execute("SELECT title FROM tasks WHERE task_id = %s", (task_id,))
+                task_result = cursor.fetchone()
+                task_title = task_result['title'] if task_result else 'Unknown Task'
+                
+                # Construct notification message
+                notification_title = f"Task Alarm Snoozed: {task_title}"
+                notification_body = (
+                    f"{username} has snoozed a task alarm: \"{task_title}\". "
+                    f"Reason: {reason}. "
+                    f"Snoozed until: {snooze_until}. "
+                )
+                
+                # Build FCM message
+                message = messaging.Message(
+                    notification=messaging.Notification(
+                        title=notification_title,
+                        body=notification_body
+                    ),
+                    token=token,
+                    data={
+                        'task_id': str(task_id),
+                        'alarm_id': str(alarm_id),
+                        'status': 'snoozed',
+                        'snooze_until': snooze_until,
+                        'snooze_reason': reason or ''
+                    },
+                    android=messaging.AndroidConfig(
+                        notification=messaging.AndroidNotification(
+                            channel_id='high_importance_channel'
+                        )
+                    )
+                )
+                
+                # Send notification
+                logger.info(f"Sending snooze notification to user: {assignee['username']}, token: {token[:10]}...")
+                response = messaging.send(message)
+                logger.info(f"Notification sent successfully: {response}")
+        
+        except Exception as e:
+            logger.error(f"Error sending snooze notification: {str(e)}")
+            # Continue execution even if notification fails
+
+        return jsonify({
+            'success': True,
+            'message': 'Alarm snoozed and task updated successfully'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error snoozing alarm: {str(e)}")
+        if conn:
+            conn.rollback()
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 
