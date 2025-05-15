@@ -1657,6 +1657,7 @@ def get_attachment(attachment_id):
 
 # ---------------- GET AUDIO NOTE (RESTful) ----------------
 @app.route('/tasks/<task_id>/audio', methods=['GET'])
+@jwt_required()
 def get_task_audio_notes(task_id):
     try:
         conn = mysql.connector.connect(**db_config)
@@ -2098,6 +2099,7 @@ def update_task(task_id):
 
 # ---------------- GET TASK VOICE NOTES ----------------
 @app.route('/api/tasks/<task_id>/voice-notes', methods=['GET'])
+@jwt_required()
 def get_task_voice_notes(task_id):
     try:
         conn = get_db_connection()
@@ -2656,6 +2658,7 @@ def update_fcm_token():
 
 # ---------------- UPLOAD FILE ----------------
 @app.route('/upload', methods=['POST'])
+@jwt_required()
 def upload_file():
     try:
         # Accept any content type for uploads
