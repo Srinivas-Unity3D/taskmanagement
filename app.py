@@ -247,6 +247,9 @@ def init_db():
                     deadline DATETIME NOT NULL,
                     priority ENUM('low', 'medium', 'high', 'urgent') NOT NULL,
                     status ENUM('pending', 'in_progress', 'completed', 'snoozed') NOT NULL DEFAULT 'pending',
+                    start_date DATE,
+                    start_time TIME,
+                    frequency VARCHAR(50),
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                     FOREIGN KEY (assigned_by) REFERENCES users(username) ON DELETE CASCADE ON UPDATE CASCADE,
@@ -1138,6 +1141,9 @@ def create_task():
         priority = data['priority']
         status = data['status']
         deadline = data['deadline']
+        start_date = data.get('start_date')
+        start_time = data.get('start_time')
+        frequency = data.get('frequency')
         audio_note = data.get('audio_note')
         attachments = data.get('attachments', [])
         alarm_settings = data.get('alarm_settings')
@@ -1152,16 +1158,18 @@ def create_task():
         # Generate task ID
         task_id = str(uuid.uuid4())
 
-        # Insert task
+        # Insert task with new columns
         cursor.execute("""
             INSERT INTO tasks (
                 task_id, title, description, assigned_to,
-                assigned_by, priority, status, deadline
+                assigned_by, priority, status, deadline,
+                start_date, start_time, frequency
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             task_id, title, description, assigned_to,
-            assigned_by, priority, status, deadline
+            assigned_by, priority, status, deadline,
+            start_date, start_time, frequency
         ))
 
         # Handle audio note
