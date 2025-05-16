@@ -314,19 +314,21 @@ def init_db():
                 CREATE TABLE IF NOT EXISTS task_alarms (
                     alarm_id VARCHAR(36) PRIMARY KEY,
                     task_id VARCHAR(36) NOT NULL,
+                    user_id VARCHAR(36) NOT NULL,
                     start_date DATE NOT NULL,
                     start_time TIME NOT NULL,
                     frequency VARCHAR(50) NOT NULL,
-                    is_active BOOLEAN DEFAULT TRUE,
+                    is_active TINYINT(1) DEFAULT 1,
                     last_triggered TIMESTAMP NULL,
                     next_trigger TIMESTAMP NOT NULL,
-                    acknowledged BOOLEAN DEFAULT FALSE,
+                    acknowledged TINYINT(1) DEFAULT 0,
                     acknowledged_at TIMESTAMP NULL,
                     created_by VARCHAR(100),
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                     FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE ON UPDATE CASCADE,
                     FOREIGN KEY (created_by) REFERENCES users(username) ON DELETE SET NULL ON UPDATE CASCADE,
+                    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE ON UPDATE CASCADE,
                     INDEX idx_next_trigger (next_trigger, is_active),
                     INDEX idx_task_id (task_id),
                     INDEX idx_is_active (is_active)
@@ -1357,32 +1359,41 @@ def create_task():
                 logger.info(f"Original start datetime (IST): {start_datetime_str}")
                 logger.info(f"Converted to UTC: {start_datetime}")
                 
-                # Generate alarm ID and insert
-                alarm_id = str(uuid.uuid4())
+                # Delete existing alarm settings
+                cursor.execute("""
+                    DELETE FROM task_alarms
+                    WHERE task_id = %s
+                """, (task_id,))
+                
                 # Look up user_id for assigned_to
                 cursor.execute("SELECT user_id FROM users WHERE username = %s", (assigned_to,))
                 user_row = cursor.fetchone()
-                user_id = user_row['user_id'] if user_row else None
-                if not user_id:
+                if not user_row:
                     logger.error(f"Could not find user_id for assigned_to: {assigned_to}")
                     raise ValueError(f"Could not find user_id for assigned_to: {assigned_to}")
+
+                user_id = user_row[0]  # Get the user_id from the result
+                
+                # Insert new alarm settings
+                alarm_id = str(uuid.uuid4())
                 cursor.execute("""
                     INSERT INTO task_alarms (
-                        alarm_id, task_id, start_date, start_time,
-                        frequency, created_by, is_active, next_trigger, user_id
+                        alarm_id, task_id, user_id, start_date, start_time,
+                        frequency, created_by, is_active, next_trigger
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, TRUE, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE, %s)
                 """, (
                     alarm_id,
                     task_id,
+                    user_id,
                     alarm_settings['start_date'],
                     alarm_settings['start_time'],
                     alarm_settings['frequency'],
                     assigned_by,
-                    start_datetime,
-                    user_id
+                    start_datetime
                 ))
-                logger.info(f"Successfully created alarm with ID: {alarm_id} and user_id: {user_id}")
+                
+                logger.info(f"Successfully updated alarm with ID: {alarm_id} and user_id: {user_id}")
             except Exception as e:
                 logger.error(f"Error creating alarm: {str(e)}")
                 raise
@@ -3241,8 +3252,8 @@ def snooze_alarm(task_id):
         cursor.execute("""
             UPDATE task_alarms 
             SET next_trigger = %s,
-                last_updated = NOW(),
-                snooze_count = snooze_count + 1
+                updated_at = NOW(),
+                last_triggered = NOW()
             WHERE alarm_id = %s
         """, (snooze_datetime, alarm_id))
         
@@ -3408,9 +3419,10 @@ def acknowledge_alarm(task_id):
         # Update the alarm to mark it as acknowledged
         cursor.execute("""
             UPDATE task_alarms 
-            SET is_active = FALSE,
+            SET is_active = 0,
+                acknowledged = 1,
                 acknowledged_at = NOW(),
-                last_updated = NOW()
+                updated_at = NOW()
             WHERE alarm_id = %s
         """, (alarm_id,))
         
