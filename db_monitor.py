@@ -59,8 +59,21 @@ def get_connection():
 def backup_table(cursor, table_name):
     """Create a backup of a table before any schema changes"""
     try:
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        # Skip if this is already a backup table
+        if '_backup_' in table_name:
+            logger.info(f"Skipping backup of backup table: {table_name}")
+            return
+
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M')
         backup_table = f"{table_name}_backup_{timestamp}"
+        
+        # Ensure backup table name isn't too long (MySQL has 64 char limit)
+        if len(backup_table) > 64:
+            # Truncate the original table name if needed
+            max_table_length = 64 - len('_backup_') - len(timestamp)
+            table_name = table_name[:max_table_length]
+            backup_table = f"{table_name}_backup_{timestamp}"
+        
         logger.info(f"Creating backup of table {table_name} as {backup_table}")
         
         # Start transaction
@@ -181,9 +194,10 @@ def check_database_tables():
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor()
         
-        # Get existing tables
+        # Get existing tables (excluding backup tables)
         cursor.execute("SHOW TABLES")
-        existing_tables = [table[0] for table in cursor.fetchall()]
+        all_tables = [table[0] for table in cursor.fetchall()]
+        existing_tables = [table for table in all_tables if '_backup_' not in table]
         
         # Check for missing tables
         missing_tables = [table for table in required_tables if table not in existing_tables]
@@ -219,9 +233,9 @@ def backup_all_tables():
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor()
         
-        # Get all tables
+        # Get all tables (excluding backup tables)
         cursor.execute("SHOW TABLES")
-        tables = [table[0] for table in cursor.fetchall()]
+        tables = [table[0] for table in cursor.fetchall() if '_backup_' not in table[0]]
         
         # Backup each table
         for table in tables:
