@@ -76,14 +76,10 @@ def convert_to_utc(datetime_str):
         raise
 
 # Setup logging
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('app.log'),
-        logging.StreamHandler()
-    ]
-)
+import os
+
+# Configure application loggingapp.logger.addHandler(logging.FileHandler('/var/log/task_management_dev/app.log'))app.logger.setLevel(logging.INFO)# Add specific error loggererror_logger = logging.getLogger('error_logger')error_handler = logging.FileHandler('/var/log/task_management_dev/app_errors.log')error_handler.setLevel(logging.ERROR)error_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))error_logger.addHandler(error_handler)
+
 logger = logging.getLogger(__name__)
 
 # Load environment variables
@@ -200,12 +196,29 @@ def init_db():
         cursor = conn.cursor()
         cursor.execute(f"USE {db_config['database']}")
 
-        # Enable foreign key checks
-        cursor.execute("SET FOREIGN_KEY_CHECKS=0")
+        # Create a backup of existing tables before any changes
+        cursor.execute("SHOW TABLES")
+        existing_tables = [table[0] for table in cursor.fetchall()]
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        
+        for table in existing_tables:
+            try:
+                backup_table = f"{table}_backup_{timestamp}"
+                cursor.execute(f"CREATE TABLE IF NOT EXISTS {backup_table} LIKE {table}")
+                cursor.execute(f"INSERT INTO {backup_table} SELECT * FROM {table}")
+                logger.info(f"Created backup of table {table}")
+            except Exception as e:
+                logger.error(f"Failed to backup table {table}: {str(e)}")
 
-        # Create tables if they don't exist
+        # Enable foreign key checks with safe mode
+        cursor.execute("SET FOREIGN_KEY_CHECKS=1")
+        cursor.execute("SET SQL_SAFE_UPDATES=1")
+
+        # Start transaction for table creation
+        cursor.execute("START TRANSACTION")
+
         try:
-            # Create users table
+            # Create tables if they don't exist
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     user_id VARCHAR(36) PRIMARY KEY,
@@ -332,17 +345,30 @@ def init_db():
                     INDEX idx_is_active (is_active)
                 )
             """)
-        except mysql.connector.Error as e:
-            if e.errno == 1050:  # Table exists
-                logger.warning(f"Table already exists: {e.msg}")
-            else:
-                raise
 
-        # Re-enable foreign key checks
-        cursor.execute("SET FOREIGN_KEY_CHECKS=1")
+            # Verify table creation and data integrity
+            cursor.execute("SHOW TABLES")
+            created_tables = [table[0] for table in cursor.fetchall()]
+            required_tables = ['users', 'tasks', 'task_audio_notes', 'task_notifications', 'task_attachments', 'task_alarms']
+            
+            missing_tables = [table for table in required_tables if table not in created_tables]
+            if missing_tables:
+                raise Exception(f"Failed to create tables: {', '.join(missing_tables)}")
 
-        conn.commit()
-        logger.info("Database tables initialized successfully")
+            # If all checks pass, commit the transaction
+            cursor.execute("COMMIT")
+            logger.info("Database tables initialized successfully")
+
+        except Exception as e:
+            cursor.execute("ROLLBACK")
+            logger.error(f"Error creating tables: {str(e)}")
+            # Restore from backup if needed
+            raise
+
+        finally:
+            # Always re-enable foreign key checks
+            cursor.execute("SET FOREIGN_KEY_CHECKS=1")
+            cursor.execute("SET SQL_SAFE_UPDATES=1")
 
     except Exception as e:
         logger.error(f"Error initializing database: {str(e)}")
@@ -372,25 +398,54 @@ except Exception as e:
     raise
 
 def get_db_connection():
-    """Get a connection from the pool with retry logic"""
-    global connection_pool
+    """Get database connection with retry logic"""
     max_retries = 3
-    retry_delay = 1  # seconds
+    retry_delay = 5  # seconds
+    last_error = None
     
     for attempt in range(max_retries):
         try:
-            connection = connection_pool.get_connection()
-            if connection.is_connected():
-                return connection
+            connection = mysql.connector.connect(
+                host=os.getenv('DB_HOST', '134.209.149.12'),
+                user=os.getenv('DB_USER', 'root'),
+                password=os.getenv('DB_PASSWORD', '123'),
+                database=os.getenv('DB_NAME', 'task_db'),
+                autocommit=False,  # Changed to False for better transaction control
+                get_warnings=True,  # Added to capture MySQL warnings
+                raise_on_warnings=True,
+                connection_timeout=10
+            )
+            app.logger.info("Database connection established successfully")
+            return connection
         except mysql.connector.Error as err:
-            logger.error(f"Database connection attempt {attempt + 1} failed: {str(err)}")
+            last_error = err
+            error_logger.error(f"Database connection attempt {attempt + 1} failed: {str(err)}")
             if attempt < max_retries - 1:
                 time.sleep(retry_delay)
-                retry_delay *= 2  # Exponential backoff
-            else:
-                raise
     
-    raise Exception("Failed to get database connection after multiple attempts")
+    # If we get here, all retries failed
+    raise last_error
+
+def safe_db_operation(operation):
+    """Execute database operations safely within a transaction"""
+    connection = None
+    cursor = None
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor(dictionary=True)
+        result = operation(connection, cursor)
+        connection.commit()
+        return result
+    except mysql.connector.Error as err:
+        if connection:
+            connection.rollback()
+        error_logger.error(f"Database operation failed: {str(err)}")
+        raise
+    finally:
+        if cursor:
+            cursor.close()
+        if connection:
+            connection.close()
 
 # Add a periodic connection check
 def check_db_connection():
