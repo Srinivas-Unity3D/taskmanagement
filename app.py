@@ -3230,55 +3230,6 @@ def download_audio_file(task_id, audio_id):
         cursor.close()
         conn.close()
 
-# ---------------- MAIN ----------------
-if __name__ == '__main__':
-    # Initialize the application
-    initialize_application()
-    
-    def check_stale_connections():
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM active_connections WHERE last_heartbeat < NOW() - INTERVAL 5 MINUTE")
-            stale_connections = cursor.fetchall()
-            
-            for connection in stale_connections:
-                cursor.execute("DELETE FROM active_connections WHERE connection_id = %s", (connection[0],))
-            
-            conn.commit()
-            cursor.close()
-            conn.close()
-            
-            if stale_connections:
-                logger.info(f"Cleaned up {len(stale_connections)} stale connections")
-        except Exception as e:
-            logger.error(f"Error checking stale connections: {str(e)}")
-    
-    def start_heartbeat_checker():
-        def run_checker():
-            while True:
-                time.sleep(60)  # Check every minute
-                check_stale_connections()
-        
-        checker_thread = threading.Thread(target=run_checker, daemon=True)
-        checker_thread.start()
-        logger.info("Started heartbeat checker thread")
-
-    # Start the heartbeat checker before server starts
-    start_heartbeat_checker()
-    
-    # Set port based on environment
-    env = os.getenv('FLASK_ENV', 'production')
-    port = 5001 if env == 'development' else 5000
-    
-    # Run the server using socketio.run() with eventlet
-    print(f'Server starting on http://0.0.0.0:{port} in {env} mode')
-    socketio.run(app, host='0.0.0.0', port=port, debug=(env == 'development'))
-
-# Print all registered routes for debugging (always runs, even with Gunicorn)
-for rule in app.url_map.iter_rules():
-    print(f"Registered route: {rule}")
-
 # ---------------- SNOOZE ALARM ----------------
 @app.route('/tasks/<task_id>/snooze_alarm', methods=['POST'])
 @jwt_required()
@@ -3548,5 +3499,54 @@ def acknowledge_alarm(task_id):
             cursor.close()
         if conn:
             conn.close()
+
+# ---------------- MAIN ----------------
+if __name__ == '__main__':
+    # Initialize the application
+    initialize_application()
+    
+    def check_stale_connections():
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM active_connections WHERE last_heartbeat < NOW() - INTERVAL 5 MINUTE")
+            stale_connections = cursor.fetchall()
+            
+            for connection in stale_connections:
+                cursor.execute("DELETE FROM active_connections WHERE connection_id = %s", (connection[0],))
+            
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            if stale_connections:
+                logger.info(f"Cleaned up {len(stale_connections)} stale connections")
+        except Exception as e:
+            logger.error(f"Error checking stale connections: {str(e)}")
+    
+    def start_heartbeat_checker():
+        def run_checker():
+            while True:
+                time.sleep(60)  # Check every minute
+                check_stale_connections()
+        
+        checker_thread = threading.Thread(target=run_checker, daemon=True)
+        checker_thread.start()
+        logger.info("Started heartbeat checker thread")
+
+    # Start the heartbeat checker before server starts
+    start_heartbeat_checker()
+    
+    # Set port based on environment
+    env = os.getenv('FLASK_ENV', 'production')
+    port = 5001 if env == 'development' else 5000
+    
+    # Run the server using socketio.run() with eventlet
+    print(f'Server starting on http://0.0.0.0:{port} in {env} mode')
+    socketio.run(app, host='0.0.0.0', port=port, debug=(env == 'development'))
+
+# Print all registered routes for debugging (always runs, even with Gunicorn)
+for rule in app.url_map.iter_rules():
+    print(f"Registered route: {rule}")
 
 
