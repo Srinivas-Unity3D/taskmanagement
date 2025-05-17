@@ -2535,7 +2535,8 @@ def store_notification(task_data, event_type, target_user, sender_role):
             logger.error("No task_id found in task_data")
             return
 
-        title = 'Task Updated' if event_type == 'task_updated' else 'New Task Assignment'
+        # title = 'Task Updated' if event_type == 'task_updated' else 'New Task Assignment'
+        title = task_data.get('title')
         description = f"{task_data['title']} {'updated' if event_type == 'task_updated' else 'assigned'} by {task_data['updated_by'] if event_type == 'task_updated' else task_data['assigned_by']}"
         sender_name = task_data['updated_by'] if event_type == 'task_updated' else task_data['assigned_by']
 
