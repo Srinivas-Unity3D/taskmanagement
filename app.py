@@ -2772,6 +2772,96 @@ def snooze_notification():
         if conn:
             conn.close()
 
+#----------------SNOOZE ALARM------------------------------
+@app.route('/notifications/send_snooze_alert', methods=['POST'])
+def send_snooze_alert():
+    conn = None
+    cursor = None
+    try:
+        data = request.get_json()
+        task_id = data.get('task_id')
+
+        if not task_id:
+            return jsonify({
+                'success': False,
+                'message': 'Missing required field: task_id'
+            }), 400
+
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(f"USE {db_config['database']}")
+
+        # Step 1: Get assigned_by, assigned_to, and title from tasks
+        cursor.execute("""
+            SELECT assigned_by, assigned_to, title 
+            FROM tasks 
+            WHERE task_id = %s
+        """, (task_id,))
+        task = cursor.fetchone()
+
+        if not task:
+            return jsonify({'success': False, 'message': 'Task not found'}), 404
+
+        assigned_by = task['assigned_by']
+        assigned_to = task['assigned_to']
+        title = task['title']
+
+        # Step 2: Get FCM token of assigned_by user
+        cursor.execute("SELECT fcm_token FROM users WHERE username = %s", (assigned_by,))
+        user = cursor.fetchone()
+
+        if not user or not user['fcm_token']:
+            return jsonify({'success': False, 'message': 'FCM token not found for assigned_by user'}), 404
+
+        token = user['fcm_token']
+
+        # Optional: Truncate title if too long
+        truncated_title = title[:80] + '...' if len(title) > 80 else title
+
+        # Step 3: Build and send FCM notification
+        notification_title = f"Task Snoozed: {title}"
+        notification_body = f"{assigned_to} has snoozed the task: \"{truncated_title}\". Please check the task in the app."
+
+        message = messaging.Message(
+            notification=messaging.Notification(
+                title=notification_title,
+                body=notification_body
+            ),
+            token=token,
+            data={
+                'task_id': str(task_id),
+                'status': 'snoozed',
+                'assigned_by': assigned_by,
+                'assigned_to': assigned_to
+            },
+            android=messaging.AndroidConfig(
+                notification=messaging.AndroidNotification(
+                    channel_id='high_importance_channel'
+                )
+            )
+        )
+
+        response = messaging.send(message)
+        logger.info(f"FCM Notification sent to {assigned_by}: {response}")
+
+        return jsonify({
+            'success': True,
+            'message': 'Snooze alert sent to assigned_by user successfully'
+        })
+
+    except Exception as e:
+        logger.error(f"Error sending snooze alert: {str(e)}")
+        if conn:
+            conn.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+
+
 def cleanup_task_files(task_id):
     """Clean up files associated with a task when it's deleted"""
     try:
