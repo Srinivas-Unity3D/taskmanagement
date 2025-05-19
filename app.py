@@ -317,6 +317,7 @@ def init_db():
                 CREATE TABLE IF NOT EXISTS task_alarms (
                     alarm_id VARCHAR(36) PRIMARY KEY,
                     task_id VARCHAR(36) NOT NULL,
+                    user_id VARCHAR(36) NOT NULL,
                     start_date DATE NOT NULL,
                     start_time TIME NOT NULL,
                     frequency VARCHAR(50) NOT NULL,
