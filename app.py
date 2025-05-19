@@ -31,6 +31,7 @@ import hashlib
 from config.config import Config
 import firebase_admin
 from functools import wraps
+from openpyxl import Workbook
 
 def verify_password(provided_password, stored_password):
     """Verify the hashed password."""
@@ -3419,6 +3420,74 @@ def snooze_alarm(task_id):
         if conn:
             conn.close()
 
+
+@app.route('/tasks/export/excel', methods=['GET'])
+def export_tasks_excel():
+    try:
+        username = request.args.get('username')
+        role = request.args.get('role', 'user')
+        if not username:
+            return jsonify({'success': False, 'message': 'Missing username parameter'}), 400
+
+        # Fetch tasks using the same logic as /tasks
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(f"USE {db_config['database']}")
+
+        if role.lower() in ['admin', 'super admin']:
+            cursor.execute("""
+                SELECT t.task_id, t.title, t.description, t.deadline, t.priority, t.status, t.assigned_by, t.assigned_to
+                FROM tasks t
+                ORDER BY t.deadline ASC
+            """)
+        else:
+            cursor.execute("""
+                SELECT t.task_id, t.title, t.description, t.deadline, t.priority, t.status, t.assigned_by, t.assigned_to
+                FROM tasks t
+                WHERE t.assigned_to = %s OR t.assigned_by = %s
+                ORDER BY t.deadline ASC
+            """, (username, username))
+        tasks = cursor.fetchall()
+
+        # Create Excel workbook in memory
+        wb = Workbook()
+        ws = wb.active
+        ws.title = 'Tasks'
+        # Header
+        ws.append(['ID', 'Title', 'Description', 'Priority', 'Status', 'Assigned By', 'Assigned To', 'Deadline'])
+        # Data rows
+        for task in tasks:
+            ws.append([
+                task['task_id'],
+                task['title'],
+                task['description'],
+                task['priority'],
+                task['status'],
+                task['assigned_by'],
+                task['assigned_to'],
+                task['deadline'].strftime('%Y-%m-%d %H:%M:%S') if task['deadline'] else ''
+            ])
+        # Save to BytesIO
+        from io import BytesIO
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+        # Send as file
+        return send_file(
+            output,
+            as_attachment=True,
+            download_name=f"tasks_{username}.xlsx",
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+    except Exception as e:
+        logger.error(f"Error exporting tasks to Excel: {str(e)}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+    finally:
+        if 'cursor' in locals():
+            cursor.close()
+        if 'conn' in locals():
+            conn.close()
+
 # ---------------- ACKNOWLEDGE ALARM ----------------
 @app.route('/tasks/<task_id>/acknowledge_alarm', methods=['POST'])
 @jwt_required()
@@ -3550,5 +3619,6 @@ if __name__ == '__main__':
 # Print all registered routes for debugging (always runs, even with Gunicorn)
 for rule in app.url_map.iter_rules():
     print(f"Registered route: {rule}")
+
 
 
