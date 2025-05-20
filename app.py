@@ -3516,12 +3516,28 @@ def download_my_tasks():
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
         cursor.execute(f"USE {db_config['database']}")
+        
+        # First verify the user exists
+        cursor.execute("SELECT username FROM users WHERE username = %s", (current_user,))
+        if not cursor.fetchone():
+            return jsonify({
+                'success': False,
+                'message': 'Invalid user'
+            }), 401
+            
         cursor.execute("""
             SELECT title, description, deadline, priority, status, assigned_by
             FROM tasks
             WHERE assigned_to = %s
         """, (current_user,))
         tasks = cursor.fetchall()
+        
+        if not tasks:
+            return jsonify({
+                'success': False,
+                'message': 'No tasks found for the current user'
+            }), 404
+            
         si = io.StringIO()
         writer = csv.writer(si)
         writer.writerow(['Title', 'Description', 'Deadline', 'Priority', 'Status', 'Assigned By'])
@@ -3532,6 +3548,7 @@ def download_my_tasks():
         output.headers["Content-type"] = "text/csv"
         return output
     except Exception as e:
+        logger.error(f"Error downloading tasks: {str(e)}")
         return jsonify({'success': False, 'message': str(e)}), 500
     finally:
         if cursor:
