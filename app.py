@@ -3509,21 +3509,19 @@ def download_my_tasks():
     import csv
     import io
     from flask import make_response
-    current_user = get_jwt_identity()  # This should be the username
+    current_user = get_jwt_identity()
     conn = None
     cursor = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
         cursor.execute(f"USE {db_config['database']}")
-        # Only fetch tasks assigned to the current user, include assigned_by
         cursor.execute("""
             SELECT title, description, deadline, priority, status, assigned_by
             FROM tasks
             WHERE assigned_to = %s
         """, (current_user,))
         tasks = cursor.fetchall()
-        # Create CSV in memory
         si = io.StringIO()
         writer = csv.writer(si)
         writer.writerow(['Title', 'Description', 'Deadline', 'Priority', 'Status', 'Assigned By'])
