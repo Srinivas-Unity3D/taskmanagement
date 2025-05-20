@@ -3516,9 +3516,9 @@ def download_my_tasks():
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
         cursor.execute(f"USE {db_config['database']}")
-        # Only fetch tasks assigned to the current user
+        # Only fetch tasks assigned to the current user, include assigned_by
         cursor.execute("""
-            SELECT title, description, deadline, priority, status
+            SELECT title, description, deadline, priority, status, assigned_by
             FROM tasks
             WHERE assigned_to = %s
         """, (current_user,))
@@ -3526,9 +3526,9 @@ def download_my_tasks():
         # Create CSV in memory
         si = io.StringIO()
         writer = csv.writer(si)
-        writer.writerow(['Title', 'Description', 'Deadline', 'Priority', 'Status'])
+        writer.writerow(['Title', 'Description', 'Deadline', 'Priority', 'Status', 'Assigned By'])
         for t in tasks:
-            writer.writerow([t['title'], t['description'], t['deadline'], t['priority'], t['status']])
+            writer.writerow([t['title'], t['description'], t['deadline'], t['priority'], t['status'], t['assigned_by']])
         output = make_response(si.getvalue())
         output.headers["Content-Disposition"] = "attachment; filename=tasks.csv"
         output.headers["Content-type"] = "text/csv"
