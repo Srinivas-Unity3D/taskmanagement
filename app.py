@@ -3508,8 +3508,10 @@ def acknowledge_alarm(task_id):
 def download_my_tasks():
     import csv
     import io
-    from flask import make_response
+    from flask import make_response, request
     current_user = get_jwt_identity()
+    logger.info(f"Download request from user: {current_user}")
+    
     conn = None
     cursor = None
     try:
@@ -3517,14 +3519,6 @@ def download_my_tasks():
         cursor = conn.cursor(dictionary=True)
         cursor.execute(f"USE {db_config['database']}")
         
-        # First verify the user exists
-        cursor.execute("SELECT username FROM users WHERE username = %s", (current_user,))
-        if not cursor.fetchone():
-            return jsonify({
-                'success': False,
-                'message': 'Invalid user'
-            }), 401
-            
         # Get tasks with assigned_by information
         cursor.execute("""
             SELECT 
@@ -3542,6 +3536,7 @@ def download_my_tasks():
         
         tasks = cursor.fetchall()
         logger.info(f"Found {len(tasks)} tasks for user {current_user}")
+        logger.info(f"Sample task data: {tasks[0] if tasks else 'No tasks'}")
         
         if not tasks:
             return jsonify({
@@ -3558,7 +3553,7 @@ def download_my_tasks():
         # Write data rows
         for task in tasks:
             logger.info(f"Writing task to CSV: {task}")
-            writer.writerow([
+            row = [
                 task.get('title', ''),
                 task.get('description', ''),
                 task.get('deadline', ''),
@@ -3566,7 +3561,9 @@ def download_my_tasks():
                 task.get('status', ''),
                 task.get('assigned_by', ''),
                 task.get('assigned_by_role', '')
-            ])
+            ]
+            logger.info(f"CSV row: {row}")
+            writer.writerow(row)
             
         output = make_response(si.getvalue())
         output.headers["Content-Disposition"] = "attachment; filename=tasks.csv"
