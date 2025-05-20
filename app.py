@@ -3527,13 +3527,21 @@ def download_my_tasks():
             
         # Get tasks with assigned_by information
         cursor.execute("""
-            SELECT t.title, t.description, t.deadline, t.priority, t.status, 
-                   t.assigned_by, u.role as assigned_by_role
+            SELECT 
+                t.title, 
+                t.description, 
+                t.deadline, 
+                t.priority, 
+                t.status, 
+                t.assigned_by,
+                u.role as assigned_by_role
             FROM tasks t
             LEFT JOIN users u ON t.assigned_by = u.username
             WHERE t.assigned_to = %s
         """, (current_user,))
+        
         tasks = cursor.fetchall()
+        logger.info(f"Found {len(tasks)} tasks for user {current_user}")
         
         if not tasks:
             return jsonify({
@@ -3543,21 +3551,30 @@ def download_my_tasks():
             
         si = io.StringIO()
         writer = csv.writer(si)
+        
+        # Write header
         writer.writerow(['Title', 'Description', 'Deadline', 'Priority', 'Status', 'Assigned By', 'Assigned By Role'])
-        for t in tasks:
+        
+        # Write data rows
+        for task in tasks:
+            logger.info(f"Writing task to CSV: {task}")
             writer.writerow([
-                t['title'], 
-                t['description'], 
-                t['deadline'], 
-                t['priority'], 
-                t['status'], 
-                t['assigned_by'],
-                t['assigned_by_role']
+                task.get('title', ''),
+                task.get('description', ''),
+                task.get('deadline', ''),
+                task.get('priority', ''),
+                task.get('status', ''),
+                task.get('assigned_by', ''),
+                task.get('assigned_by_role', '')
             ])
+            
         output = make_response(si.getvalue())
         output.headers["Content-Disposition"] = "attachment; filename=tasks.csv"
         output.headers["Content-type"] = "text/csv"
+        
+        logger.info("CSV file generated successfully")
         return output
+        
     except Exception as e:
         logger.error(f"Error downloading tasks: {str(e)}")
         return jsonify({'success': False, 'message': str(e)}), 500
