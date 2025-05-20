@@ -3525,10 +3525,13 @@ def download_my_tasks():
                 'message': 'Invalid user'
             }), 401
             
+        # Get tasks with assigned_by information
         cursor.execute("""
-            SELECT title, description, deadline, priority, status, assigned_by
-            FROM tasks
-            WHERE assigned_to = %s
+            SELECT t.title, t.description, t.deadline, t.priority, t.status, 
+                   t.assigned_by, u.role as assigned_by_role
+            FROM tasks t
+            LEFT JOIN users u ON t.assigned_by = u.username
+            WHERE t.assigned_to = %s
         """, (current_user,))
         tasks = cursor.fetchall()
         
@@ -3540,9 +3543,17 @@ def download_my_tasks():
             
         si = io.StringIO()
         writer = csv.writer(si)
-        writer.writerow(['Title', 'Description', 'Deadline', 'Priority', 'Status', 'Assigned By'])
+        writer.writerow(['Title', 'Description', 'Deadline', 'Priority', 'Status', 'Assigned By', 'Assigned By Role'])
         for t in tasks:
-            writer.writerow([t['title'], t['description'], t['deadline'], t['priority'], t['status'], t['assigned_by']])
+            writer.writerow([
+                t['title'], 
+                t['description'], 
+                t['deadline'], 
+                t['priority'], 
+                t['status'], 
+                t['assigned_by'],
+                t['assigned_by_role']
+            ])
         output = make_response(si.getvalue())
         output.headers["Content-Disposition"] = "attachment; filename=tasks.csv"
         output.headers["Content-type"] = "text/csv"
