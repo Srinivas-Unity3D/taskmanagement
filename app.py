@@ -31,6 +31,7 @@ import hashlib
 from config.config import Config
 import firebase_admin
 from functools import wraps
+import csv
 
 def verify_password(provided_password, stored_password):
     """Verify the hashed password."""
@@ -3496,6 +3497,44 @@ def acknowledge_alarm(task_id):
             'success': False,
             'message': str(e)
         }), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+@app.route('/tasks/download', methods=['GET'])
+@jwt_required()
+def download_my_tasks():
+    import csv
+    import io
+    from flask import make_response
+    current_user = get_jwt_identity()  # This should be the username
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(f"USE {db_config['database']}")
+        # Only fetch tasks assigned to the current user
+        cursor.execute("""
+            SELECT title, description, deadline, priority, status
+            FROM tasks
+            WHERE assigned_to = %s
+        """, (current_user,))
+        tasks = cursor.fetchall()
+        # Create CSV in memory
+        si = io.StringIO()
+        writer = csv.writer(si)
+        writer.writerow(['Title', 'Description', 'Deadline', 'Priority', 'Status'])
+        for t in tasks:
+            writer.writerow([t['title'], t['description'], t['deadline'], t['priority'], t['status']])
+        output = make_response(si.getvalue())
+        output.headers["Content-Disposition"] = "attachment; filename=tasks.csv"
+        output.headers["Content-type"] = "text/csv"
+        return output
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
     finally:
         if cursor:
             cursor.close()
