@@ -462,90 +462,140 @@ def update_alarm_status(alarm_id, last_triggered, next_trigger):
 def send_alarm_notification(alarm):
     """Send FCM notification to user for the alarm using Firebase Admin SDK"""
     try:
+        # Log the entire alarm dictionary
+        logger.debug(f"Received alarm data: {alarm}")
+
+        # Validate and fetch FCM token
         if not alarm.get('fcm_token'):
-            logger.warning(f"No FCM token for alarm ID: {alarm['alarm_id']}, user ID: {alarm.get('user_id', 'unknown')}")
+            logger.warning(f"No FCM token for alarm ID: {alarm.get('alarm_id', 'unknown')}, "
+                          f"user ID: {alarm.get('user_id', 'unknown')}")
             # Fallback query for FCM token
             try:
                 conn = get_db_connection()
-                if conn:
-                    cursor = conn.cursor(dictionary=True)
-                    cursor.execute("""
-                        SELECT u.fcm_token 
-                        FROM users u
-                        JOIN task_alarms a ON a.user_id = u.user_id
-                        WHERE a.task_id = %s
-                    """, (alarm['task_id'],))
-                    result = cursor.fetchone()
-                    cursor.close()
-                    conn.close()
-                    if result and result.get('fcm_token'):
-                        logger.info(f"Found FCM token from fallback query: {result['fcm_token'][:10]}...")
-                        alarm['fcm_token'] = result['fcm_token']
-                    else:
-                        logger.warning(f"No FCM token found in fallback query for task ID: {alarm['task_id']}")
-                        return False
+                if not conn:
+                    logger.error("Failed to establish database connection")
+                    return False
+                cursor = conn.cursor(dictionary=True)
+                cursor.execute("""
+                    SELECT u.fcm_token 
+                    FROM users u
+                    JOIN task_alarms a ON a.user_id = u.user_id
+                    WHERE a.task_id = %s
+                """, (alarm.get('task_id', 'unknown'),))
+                result = cursor.fetchone()
+                logger.debug(f"FCM token query result: {result}")
+                cursor.close()
+                conn.close()
+                if result and result.get('fcm_token'):
+                    logger.info(f"Found FCM token from fallback query: {result['fcm_token'][:10]}...")
+                    alarm['fcm_token'] = result['fcm_token']
+                else:
+                    logger.warning(f"No FCM token found in fallback query for task ID: {alarm.get('task_id', 'unknown')}")
+                    return False
             except Exception as e:
                 logger.error(f"Error in FCM token fallback lookup: {e}")
                 return False
 
-        logger.info(f"Sending alarm notification for task: {alarm['task_id']} with FCM token: {alarm['fcm_token'][:10]}...")
+        if not alarm.get('fcm_token'):
+            logger.error(f"Cannot send notification: No FCM token available for alarm ID: {alarm.get('alarm_id', 'unknown')}")
+            return False
 
-        # Get assigned_by and deadline
+        logger.info(f"Preparing alarm notification for task: {alarm.get('task_id', 'unknown')} "
+                   f"with FCM token: {alarm['fcm_token'][:10]}...")
+
+        # Validate required fields with defaults
+        task_id = str(alarm.get('task_id') or 'unknown_task')
+        alarm_id = str(alarm.get('alarm_id') or f"alarm_{task_id}")
+        task_title = str(alarm.get('task_title') or 'Untitled Task')
+        task_description = str(alarm.get('task_description') or 'Time to check your task!')
+        logger.debug(f"Task fields: task_id={task_id}, alarm_id={alarm_id}, task_title={task_title}, "
+                    f"task_description={task_description}")
+
+        # Get assigned_by
         assigned_by = alarm.get('assigned_by', 'Unknown')
-        if not assigned_by:
+        if not assigned_by or assigned_by == 'Unknown':
             try:
                 conn = get_db_connection()
-                if conn:
+                if not conn:
+                    logger.error("Failed to establish database connection for assigned_by query")
+                else:
                     cursor = conn.cursor(dictionary=True)
                     cursor.execute("""
                         SELECT assigned_by FROM tasks WHERE task_id = %s
-                    """, (alarm['task_id'],))
+                    """, (task_id,))
                     result = cursor.fetchone()
+                    logger.debug(f"Assigned_by query result: {result}")
                     cursor.close()
                     conn.close()
-                    assigned_by = result['assigned_by'] if result else 'Unknown'
+                    assigned_by = str(result['assigned_by'] if result and result.get('assigned_by') else 'Unknown')
             except Exception as e:
-                logger.error(f"Error retrieving assigned_by: {e}")
+                logger.error(f"Error retrieving assigned_by for task ID {task_id}: {e}")
+        logger.debug(f"Assigned by: {assigned_by}")
 
         # Format deadline
         deadline = alarm.get('formatted_deadline', '')
         if not deadline and alarm.get('deadline'):
             try:
-                deadline = alarm['deadline'].strftime('%Y-%m-%d') if not isinstance(alarm['deadline'], str) else alarm['deadline']
+                if isinstance(alarm['deadline'], datetime):
+                    deadline = alarm['deadline'].strftime('%Y-%m-%d')
+                else:
+                    deadline = str(alarm['deadline'])
+                logger.debug(f"Formatted deadline: {deadline}")
             except Exception as e:
                 logger.error(f"Error formatting deadline: {e}")
-                deadline = str(alarm['deadline']) if alarm['deadline'] else ''
+                deadline = ''
+        logger.debug(f"Deadline: {deadline}")
 
-        assignee_name = alarm.get('assigned_to', 'You')
+        assignee_name = str(alarm.get('assigned_to', 'You'))
+        logger.debug(f"Assignee name: {assignee_name}")
 
-        # Get trigger time (convert next_trigger to ISO 8601 in UTC)
+        # Get and validate trigger time
         trigger_time = alarm.get('next_trigger')
-        if trigger_time:
-            if isinstance(trigger_time, str):
-                trigger_time_dt = datetime.strptime(trigger_time, '%Y-%m-%d %H:%M:%S')
-            else:
-                trigger_time_dt = trigger_time
-            trigger_time_iso = trigger_time_dt.replace(tzinfo=timezone.utc).isoformat()
+        logger.debug(f"Raw next_trigger: {trigger_time} (type: {type(trigger_time)})")
+
+        if not trigger_time:
+            logger.warning(f"No next_trigger for alarm ID: {alarm_id}, using current UTC time")
+            trigger_time_dt = datetime.now(timezone.utc)
         else:
-            trigger_time_iso = datetime.now(timezone.utc).isoformat()
+            try:
+                if isinstance(trigger_time, str):
+                    trigger_time_dt = datetime.strptime(trigger_time, '%Y-%m-%d %H:%M:%S')
+                    logger.debug(f"Parsed string next_trigger: {trigger_time_dt}")
+                else:
+                    trigger_time_dt = trigger_time
+                    logger.debug(f"Using next_trigger as datetime: {trigger_time_dt}")
+                # Ensure UTC timezone
+                if not trigger_time_dt.tzinfo:
+                    trigger_time_dt = trigger_time_dt.replace(tzinfo=timezone.utc)
+            except ValueError as e:
+                logger.error(f"Invalid next_trigger format for alarm ID {alarm_id}: {trigger_time}, error: {e}")
+                logger.warning(f"Using current UTC time as fallback")
+                trigger_time_dt = datetime.now(timezone.utc)
+
+        trigger_time_iso = trigger_time_dt.isoformat()
+        logger.debug(f"Final trigger_time_iso: {trigger_time_iso}")
+
+        # Prepare FCM message
+        data_payload = {
+            "type": "set_alarm",
+            "task_id": task_id,
+            "alarm_id": alarm_id,
+            "title": task_title,
+            "assigned_by": assigned_by,
+            "deadline": deadline,
+            "assignee_name": assignee_name,
+            "trigger_time": trigger_time_iso,
+            "click_action": "FLUTTER_NOTIFICATION_CLICK"
+        }
+        logger.debug(f"FCM data payload: {data_payload}")
 
         try:
             message = messaging.Message(
                 notification=messaging.Notification(
-                    title=f"Task Alarm: {alarm['task_title']}",
-                    body=alarm['task_description'] or "Time to check your task!"
+                    title=f"Task Alarm: {task_title}",
+                    body=task_description
                 ),
-                data={
-                    "type": "set_alarm",
-                    "task_id": alarm['task_id'],
-                    "alarm_id": alarm['alarm_id'],
-                    "title": alarm['task_title'],
-                    "assigned_by": assigned_by,
-                    "deadline": deadline,
-                    "assignee_name": assignee_name,
-                    "trigger_time": trigger_time_iso,  # Add trigger time
-                    "click_action": "FLUTTER_NOTIFICATION_CLICK"
-                },
+                data=data_payload,
                 android=messaging.AndroidConfig(
                     priority='high',
                     notification=messaging.AndroidNotification(
@@ -569,15 +619,16 @@ def send_alarm_notification(alarm):
                 token=alarm['fcm_token']
             )
 
+            logger.debug("Sending FCM message")
             response = messaging.send(message)
-            logger.info(f"Successfully sent alarm notification: {response}")
+            logger.info(f"Successfully sent alarm notification for alarm ID: {alarm_id}, response: {response}")
             return True
         except Exception as e:
-            logger.error(f"Error sending notification with Firebase Admin SDK: {e}")
+            logger.error(f"Error sending notification with Firebase Admin SDK for alarm ID: {alarm_id}: {e}")
             return False
 
     except Exception as e:
-        logger.error(f"Error sending alarm notification: {str(e)}")
+        logger.error(f"Unexpected error sending alarm notification for alarm ID: {alarm.get('alarm_id', 'unknown')}: {e}")
         return False
 
 def process_pending_alarms():
