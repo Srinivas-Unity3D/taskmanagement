@@ -85,15 +85,70 @@ def get_db_connection():
         logger.error(f"Database connection error: {str(e)}")
         return None
 
+# def get_pending_alarms():
+#     """Get all pending alarms that should be triggered"""
+#     try:
+#         conn = get_db_connection()
+#         if not conn:
+#             return []
+#         cursor = conn.cursor(dictionary=True)
+        
+#         # Get current UTC time with timezone info
+#         now = datetime.now(timezone.utc)
+#         now_str = now.strftime('%Y-%m-%d %H:%M:%S')
+#         logger.info(f"Current UTC time: {now}")
+#         logger.info(f"Checking for alarms with: next_trigger <= {now_str}")
+        
+#         query = """
+#         SELECT 
+#             a.*,
+#             t.title as task_title, 
+#             t.description as task_description,
+#             t.assigned_by, 
+#             t.assigned_to,
+#             t.deadline,
+#             DATE_FORMAT(t.deadline, '%Y-%m-%d') as formatted_deadline,
+#             u.fcm_token
+#         FROM 
+#             task_alarms a
+#         JOIN 
+#             tasks t ON a.task_id = t.task_id
+#         JOIN 
+#             users u ON u.user_id = a.user_id
+#         WHERE 
+#             a.is_active = 1 
+#             AND a.next_trigger IS NOT NULL
+#             AND a.next_trigger <= %s
+#             AND u.fcm_token IS NOT NULL
+#         """
+#         logger.info(f"Executing query with param: next_trigger={now_str}")
+#         cursor.execute(query, (now_str,))
+#         alarms = cursor.fetchall()
+        
+#         if alarms:
+#             logger.info(f"Found {len(alarms)} pending alarms")
+#             for alarm in alarms:
+#                 logger.info(f"Alarm details: ID={alarm['alarm_id']}, Task={alarm['task_title']}, Assigned by={alarm['assigned_by']}, Next trigger={alarm['next_trigger']} (Assigned to: {alarm['assigned_to']})")
+#         else:
+#             logger.info("No pending alarms found")
+        
+#         cursor.close()
+#         conn.close()
+#         return alarms
+#     except mysql.connector.Error as e:
+#         logger.error(f"Error getting pending alarms: {str(e)}")
+#         return []
+
 def get_pending_alarms():
     """Get all pending alarms that should be triggered"""
     try:
         conn = get_db_connection()
         if not conn:
+            logger.error("Failed to establish database connection")
             return []
         cursor = conn.cursor(dictionary=True)
         
-        # Get current UTC time with timezone info
+        # Get current UTC time
         now = datetime.now(timezone.utc)
         now_str = now.strftime('%Y-%m-%d %H:%M:%S')
         logger.info(f"Current UTC time: {now}")
@@ -101,7 +156,15 @@ def get_pending_alarms():
         
         query = """
         SELECT 
-            a.*,
+            a.alarm_id,
+            a.task_id,
+            a.user_id,
+            a.start_date,
+            a.start_time,
+            a.frequency,
+            a.is_active,
+            a.last_triggered,
+            a.next_trigger,
             t.title as task_title, 
             t.description as task_description,
             t.assigned_by, 
@@ -128,7 +191,9 @@ def get_pending_alarms():
         if alarms:
             logger.info(f"Found {len(alarms)} pending alarms")
             for alarm in alarms:
-                logger.info(f"Alarm details: ID={alarm['alarm_id']}, Task={alarm['task_title']}, Assigned by={alarm['assigned_by']}, Next trigger={alarm['next_trigger']} (Assigned to: {alarm['assigned_to']})")
+                logger.info(f"Alarm details: ID={alarm['alarm_id']}, Task={alarm['task_title']}, "
+                           f"Assigned by={alarm['assigned_by']}, Next trigger={alarm['next_trigger']}, "
+                           f"Assigned to={alarm['assigned_to']}, FCM token={alarm['fcm_token'][:10]}...")
         else:
             logger.info("No pending alarms found")
         
@@ -136,8 +201,14 @@ def get_pending_alarms():
         conn.close()
         return alarms
     except mysql.connector.Error as e:
-        logger.error(f"Error getting pending alarms: {str(e)}")
+        logger.error(f"Error getting pending alarms: {e}")
         return []
+    except Exception as e:
+        logger.error(f"Unexpected error in get_pending_alarms: {e}")
+        return []
+    
+
+
 
 def calculate_next_trigger_time(alarm):
     """Calculate the next trigger time based on frequency"""
