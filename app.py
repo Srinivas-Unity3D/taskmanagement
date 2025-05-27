@@ -1115,7 +1115,415 @@ def initialize_application():
         logger.error(f"Error initializing application: {str(e)}")
         sys.exit(1)
 
+
+def is_valid_uuid(val):
+    try:
+        uuid.UUID(str(val))
+        return True
+    except ValueError:
+        return False
+
+def convert_to_utc(datetime_str):
+    """Convert IST datetime string to UTC."""
+    try:
+        # Parse IST datetime (assuming Asia/Kolkata)
+        
+        ist = pytz.timezone('Asia/Kolkata')
+        dt = datetime.strptime(datetime_str, '%Y-%m-%d %H:%M:%S')
+        dt_ist = ist.localize(dt)
+        dt_utc = dt_ist.astimezone(pytz.UTC)
+        return dt_utc.strftime('%Y-%m-%d %H:%M:%S')
+    except Exception as e:
+        logger.error(f"Error converting to UTC: {str(e)}")
+        raise
+
 # ---------------- CREATE TASK ----------------
+# @app.route('/tasks', methods=['POST'])
+# @jwt_required()
+# def create_task():
+#     conn = None
+#     cursor = None
+#     try:
+#         # Get user identity from token
+#         current_user = get_jwt_identity()
+#         logger.info(f"Create task request by user: {current_user}")
+        
+#         data = request.get_json()
+#         logger.debug(f"Task creation data: {data}")
+        
+#         # Validate required fields
+#         required_fields = ['title', 'description', 'assigned_to', 'assigned_by', 'priority', 'status', 'deadline']
+#         for field in required_fields:
+#             if field not in data:
+#                 logger.warning(f"Missing required field in task creation: {field}")
+#                 return jsonify({
+#                     'success': False,
+#                     'message': f'Missing required field: {field}'
+#                 }), 400
+
+#         title = data['title']
+#         description = data['description']
+#         assigned_to = data['assigned_to']
+#         assigned_by = data['assigned_by']
+#         priority = data['priority']
+#         status = data['status']
+#         deadline = data['deadline']
+#         start_date = data.get('start_date')
+#         start_time = data.get('start_time')
+#         frequency = data.get('frequency')
+#         audio_note = data.get('audio_note')
+#         attachments = data.get('attachments', [])
+#         alarm_settings = data.get('alarm_settings')
+        
+#         logger.info(f"Creating task: {title} for {assigned_to}, alarm settings: {alarm_settings}")
+
+#         # Initialize database connection
+#         conn = get_db_connection()
+#         cursor = conn.cursor(dictionary=True)
+#         cursor.execute(f"USE {db_config['database']}")
+
+#         # Generate task ID
+#         task_id = str(uuid.uuid4())
+
+#         # Insert task with new columns
+#         cursor.execute("""
+#             INSERT INTO tasks (
+#                 task_id, title, description, assigned_to,
+#                 assigned_by, priority, status, deadline,
+#                 start_date, start_time, frequency
+#             )
+#             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+#         """, (
+#             task_id, title, description, assigned_to,
+#             assigned_by, priority, status, deadline,
+#             start_date, start_time, frequency
+#         ))
+
+#         # Handle audio note
+#         if audio_note:
+#             try:
+#                 logger.info(f"Processing audio note for task update: {task_id}")
+#                 logger.debug(f"Audio note data: {audio_note}")
+                
+#                 file_id = audio_note.get('file_id')
+#                 audio_data = audio_note.get('audio_data')
+#                 duration = audio_note.get('duration', 0)
+#                 file_name = audio_note.get('filename', 'voice_note.wav')
+#                 created_by = data.get('updated_by', assigned_by)
+                
+#                 logger.info(f"Audio note details - file_id: {file_id}, data length: {'Yes' if audio_data else 'No'}, duration: {duration}, filename: {file_name}")
+                
+#                 # Ensure file extension is .wav
+#                 if not file_name.lower().endswith('.wav'):
+#                     name_parts = file_name.rsplit('.', 1)
+#                     file_name = name_parts[0] + '.wav'
+#                     logger.info(f"Changed audio file extension to .wav: {file_name}")
+                
+#                 # Check if we have a file_id from a previous upload
+#                 if file_id:
+#                     # Use the existing file_id as audio_id
+#                     audio_id = file_id
+#                     # The file should already be at this location from the upload endpoint
+#                     audio_path = os.path.join('uploads', 'audio', f"{audio_id}_{file_name}")
+#                     logger.info(f"Using pre-uploaded audio file with ID: {file_id}, path: {audio_path}")
+                    
+#                     # Insert audio note record
+#                     cursor.execute("""
+#                         INSERT INTO task_audio_notes (
+#                             audio_id, task_id, file_path, duration, 
+#                             file_name, created_by, note_type
+#                         )
+#                         VALUES (%s, %s, %s, %s, %s, %s, %s)
+#                     """, (
+#                         audio_id, task_id, audio_path, duration,
+#                         file_name, created_by, 'normal'
+#                     ))
+#                     logger.info(f"Added audio note with existing file_id: {audio_id}")
+                
+#                 elif audio_data:
+#                     # Save audio file
+#                     audio_id = str(uuid.uuid4())
+#                     audio_path = os.path.join(AUDIO_FOLDER, f"{audio_id}_{file_name}")
+#                     logger.info(f"Saving direct audio data with new ID: {audio_id}, path: {audio_path}")
+                    
+#                     os.makedirs(AUDIO_FOLDER, exist_ok=True)
+#                     with open(audio_path, 'wb') as f:
+#                         f.write(base64.b64decode(audio_data))
+                    
+#                     # Insert audio note record
+#                     cursor.execute("""
+#                         INSERT INTO task_audio_notes (
+#                             audio_id, task_id, file_path, duration, 
+#                             file_name, created_by, note_type
+#                         )
+#                         VALUES (%s, %s, %s, %s, %s, %s, %s)
+#                     """, (
+#                         audio_id, task_id, audio_path, duration,
+#                         file_name, created_by, 'normal'
+#                     ))
+#                     logger.info(f"Added audio note with direct data: {audio_id}")
+#                 else:
+#                     logger.warning(f"Audio note provided but missing both file_id and audio_data")
+#             except Exception as e:
+#                 logger.error(f"Error handling audio note: {str(e)}")
+#                 logger.exception("Audio note error details:")
+#                 raise
+
+#         # Handle attachments
+#         if attachments:
+#             logger.info(f"Processing {len(attachments)} attachments for new task: {task_id}")
+#             for i, attachment in enumerate(attachments):
+#                 try:
+#                     logger.info(f"Processing attachment {i+1}/{len(attachments)}")
+#                     logger.debug(f"Attachment data: {attachment}")
+                    
+#                     file_id = attachment.get('file_id')
+#                     file_data = attachment.get('file_data')
+#                     file_name = attachment.get('file_name')
+#                     file_type = attachment.get('file_type')
+                    
+#                     logger.info(f"Attachment info - file_id: {file_id}, has_data: {'Yes' if file_data else 'No'}, name: {file_name}, type: {file_type}")
+                    
+#                     # Use existing file_id if provided (from previous upload)
+#                     if file_id and file_name:
+#                         # Use the file_id as attachment_id
+#                         attachment_id = file_id
+                        
+#                         # Get the file path based on the upload endpoint pattern
+#                         attachment_path = os.path.join('uploads', 'attachments', f"{attachment_id}_{file_name}")
+#                         logger.info(f"Using pre-uploaded attachment file with ID: {file_id}, path: {attachment_path}")
+                        
+#                         # Insert attachment record
+#                         cursor.execute("""
+#                             INSERT INTO task_attachments (
+#                                 attachment_id, task_id, file_name,
+#                                 file_path, file_type, file_size,
+#                                 created_by
+#                             )
+#                             VALUES (%s, %s, %s, %s, %s, %s, %s)
+#                         """, (
+#                             attachment_id,
+#                             task_id,
+#                             file_name,
+#                             attachment_path,
+#                             file_type,
+#                             0,  # File size unknown but not critical
+#                             assigned_by
+#                         ))
+#                         logger.info(f"Added attachment with existing file_id: {attachment_id}")
+                    
+#                     # Handle direct file data if provided instead
+#                     elif file_data and file_name:
+#                         # Generate a new UUID for this attachment
+#                         attachment_id = str(uuid.uuid4())
+#                         logger.info(f"Creating new attachment with ID: {attachment_id} for file: {file_name}")
+                        
+#                         # Save attachment file
+#                         attachment_path = os.path.join(ATTACHMENTS_FOLDER, f"{attachment_id}_{file_name}")
+#                         os.makedirs(ATTACHMENTS_FOLDER, exist_ok=True)
+#                         with open(attachment_path, 'wb') as f:
+#                             f.write(base64.b64decode(file_data))
+                        
+#                         # Get file size
+#                         file_size = os.path.getsize(attachment_path)
+#                         logger.info(f"Saved attachment file, size: {file_size} bytes")
+                        
+#                         # Insert attachment record
+#                         cursor.execute("""
+#                             INSERT INTO task_attachments (
+#                                 attachment_id, task_id, file_name,
+#                                 file_path, file_type, file_size,
+#                                 created_by
+#                             )
+#                             VALUES (%s, %s, %s, %s, %s, %s, %s)
+#                         """, (
+#                             attachment_id,
+#                             task_id,
+#                             file_name,
+#                             attachment_path,
+#                             file_type,
+#                             file_size,
+#                             assigned_by
+#                         ))
+#                         logger.info(f"Added attachment with direct data: {attachment_id}")
+#                     else:
+#                         logger.warning("Attachment missing both file_id and file_data, skipping")
+#                 except Exception as e:
+#                     logger.error(f"Error handling attachment: {str(e)}")
+#                     logger.exception("Attachment error details:")
+#                     continue
+
+#         # Handle alarm settings
+#         if alarm_settings:
+#             try:
+#                 logger.info(f"Processing alarm settings: {alarm_settings}")
+                
+#                 # Validate required fields
+#                 required_fields = ['start_date', 'start_time', 'frequency']
+#                 missing_fields = [field for field in required_fields if field not in alarm_settings]
+#                 if missing_fields:
+#                     logger.error(f"Missing required alarm fields: {missing_fields}")
+#                     raise ValueError(f"Missing required alarm fields: {missing_fields}")
+                
+#                 # Validate date format
+#                 try:
+#                     datetime.strptime(alarm_settings['start_date'], '%Y-%m-%d')
+#                 except ValueError:
+#                     logger.error(f"Invalid start_date format: {alarm_settings['start_date']}")
+#                     raise ValueError("Invalid start_date format. Expected YYYY-MM-DD")
+                
+#                 # Validate time format
+#                 try:
+#                     datetime.strptime(alarm_settings['start_time'], '%H:%M:%S')
+#                 except ValueError:
+#                     logger.error(f"Invalid start_time format: {alarm_settings['start_time']}")
+#                     raise ValueError("Invalid start_time format. Expected HH:MM:SS")
+                
+#                 # Validate frequency
+#                 valid_frequencies = ['30 minutes', '1 hour', '2 hours', '4 hours', '6 hours', '8 hours']
+#                 if alarm_settings['frequency'] not in valid_frequencies:
+#                     logger.error(f"Invalid frequency: {alarm_settings['frequency']}")
+#                     raise ValueError(f"Invalid frequency. Must be one of: {valid_frequencies}")
+                
+#                 # Calculate next trigger time in UTC
+#                 start_datetime_str = f"{alarm_settings['start_date']} {alarm_settings['start_time']}"
+#                 start_datetime = convert_to_utc(start_datetime_str)
+                
+#                 logger.info(f"Original start datetime (IST): {start_datetime_str}")
+#                 logger.info(f"Converted to UTC: {start_datetime}")
+                
+#                 # Generate alarm ID and insert
+#                 alarm_id = str(uuid.uuid4())
+#                 # Look up user_id for assigned_to
+#                 cursor.execute("SELECT user_id FROM users WHERE username = %s", (assigned_to,))
+#                 user_row = cursor.fetchone()
+#                 user_id = user_row['user_id'] if user_row else None
+#                 if not user_id:
+#                     logger.error(f"Could not find user_id for assigned_to: {assigned_to}")
+#                     raise ValueError(f"Could not find user_id for assigned_to: {assigned_to}")
+#                 cursor.execute("""
+#                     INSERT INTO task_alarms (
+#                         alarm_id, task_id, start_date, start_time,
+#                         frequency, created_by, is_active, next_trigger, user_id
+#                     )
+#                     VALUES (%s, %s, %s, %s, %s, %s, TRUE, %s, %s)
+#                 """, (
+#                     alarm_id,
+#                     task_id,
+#                     alarm_settings['start_date'],
+#                     alarm_settings['start_time'],
+#                     alarm_settings['frequency'],
+#                     assigned_by,
+#                     start_datetime,
+#                     user_id
+#                 ))
+#                 logger.info(f"Successfully created alarm with ID: {alarm_id} and user_id: {user_id}")
+#             except Exception as e:
+#                 logger.error(f"Error creating alarm: {str(e)}")
+#                 raise
+
+#         conn.commit()
+        
+        # Notify about task creation
+    #     try:
+    #         notify_task_update({
+    #             'task_id': task_id,
+    #             'title': title,
+    #             'description': description,
+    #             'assigned_to': assigned_to,
+    #             'assigned_by': assigned_by,
+    #             'priority': priority,
+    #             'status': status,
+    #             'deadline': deadline
+    #         }, 'task_created')
+    #     except Exception as e:
+    #         logger.error(f"Error sending task creation notification: {str(e)}")
+
+
+    #     # Send notification to assigned_to
+    #     try:
+    #         # Fetch assigned_to's FCM token and assigned_by's username
+    #         cursor.execute("""
+    #             SELECT u1.fcm_token, u2.username AS creator_name
+    #             FROM users u1, users u2
+    #             WHERE u1.username = %s AND u2.username = %s
+    #         """, (assigned_to, assigned_by))
+    #         result = cursor.fetchone()
+            
+    #         if not result or not result['fcm_token']:
+    #             logger.warning(f"No FCM token found for user_id: {assigned_to}")
+    #         else:
+    #             token = result['fcm_token']
+    #             creator_name = result['creator_name']
+                
+    #             # Truncate description for notification
+    #             truncated_description = description[:80] + "..." if len(description) > 80 else description
+                
+    #             # Construct notification message
+    #             notification_title = f"Task Created: {title}"
+    #             notification_body = (
+    #                 f"{creator_name} has created a new task: \"{title}\". "
+    #                 f"Description: {truncated_description}. "
+    #                 f"Status: {status.capitalize()}. "
+    #                 "Please review in the Task Management App."
+    #             )
+                
+    #             # Build FCM message
+    #             message = messaging.Message(
+    #                 notification=messaging.Notification(
+    #                     title=notification_title,
+    #                     body=notification_body
+    #                 ),
+    #                 token=token,
+    #                 data={
+    #                     'task_id': str(task_id),
+    #                     'priority': priority,
+    #                     'status': status,
+    #                     'deadline': deadline,
+    #                     'assigned_to': assigned_to,
+    #                     'assigned_by': assigned_by,
+    #                     'creator_name': creator_name
+    #                 },
+    #                 android=messaging.AndroidConfig(
+    #                     notification=messaging.AndroidNotification(
+    #                         # channel_id='high_importance_channel'
+    #                         channel_id='high_importance_channel'
+    #                     )
+    #                 )
+    #             )
+                
+    #             # Send notification
+    #             logger.info(f"Sending creation notification to user_id: {assigned_to}, token: {token[:10]}...")
+    #             response = messaging.send(message)
+    #             logger.info(f"Notification sent successfully: {response}")
+        
+    #     except Exception as e:
+    #         logger.error(f"Error sending task creation notification: {str(e)}")
+    #         # Continue execution even if notification fails
+
+    #     conn.commit()
+        
+    #     return jsonify({
+    #         'success': True,
+    #         'message': 'Task created successfully',
+    #         'task_id': task_id
+    #     }), 201
+        
+    # except Exception as e:
+    #     if conn:
+    #         conn.rollback()
+    #     logger.error(f"Error creating task: {str(e)}")
+    #     return jsonify({
+    #         'success': False,
+    #         'message': f"Error creating task: {str(e)}"
+    #     }), 500
+    # finally:
+    #     if cursor:
+    #         cursor.close()
+    #     if conn:
+    #         conn.close()
+
+
 @app.route('/tasks', methods=['POST'])
 @jwt_required()
 def create_task():
@@ -1125,10 +1533,10 @@ def create_task():
         # Get user identity from token
         current_user = get_jwt_identity()
         logger.info(f"Create task request by user: {current_user}")
-        
+
         data = request.get_json()
         logger.debug(f"Task creation data: {data}")
-        
+
         # Validate required fields
         required_fields = ['title', 'description', 'assigned_to', 'assigned_by', 'priority', 'status', 'deadline']
         for field in required_fields:
@@ -1146,66 +1554,73 @@ def create_task():
         priority = data['priority']
         status = data['status']
         deadline = data['deadline']
-        start_date = data.get('start_date')
-        start_time = data.get('start_time')
-        frequency = data.get('frequency')
+        task_id = data.get('task_id', str(uuid.uuid4()))  # Use frontend task_id if provided
         audio_note = data.get('audio_note')
         attachments = data.get('attachments', [])
         alarm_settings = data.get('alarm_settings')
-        
-        logger.info(f"Creating task: {title} for {assigned_to}, alarm settings: {alarm_settings}")
+
+        # Validate task_id
+        if not is_valid_uuid(task_id):
+            logger.error(f"Invalid task_id format: {task_id}")
+            return jsonify({
+                'success': False,
+                'message': 'Invalid task_id format'
+            }), 400
+
+        logger.info(f"Creating task: {title} (ID: {task_id}) for {assigned_to}, alarm settings: {alarm_settings}")
 
         # Initialize database connection
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
         cursor.execute(f"USE {db_config['database']}")
 
-        # Generate task ID
-        task_id = str(uuid.uuid4())
+        # Verify assigned_to user exists
+        cursor.execute("SELECT user_id FROM users WHERE username = %s", (assigned_to,))
+        user_row = cursor.fetchone()
+        if not user_row:
+            logger.error(f"User not found for assigned_to: {assigned_to}")
+            return jsonify({
+                'success': False,
+                'message': f'User not found: {assigned_to}'
+            }), 404
+        user_id = user_row['user_id']
 
-        # Insert task with new columns
+        # Insert task
         cursor.execute("""
             INSERT INTO tasks (
                 task_id, title, description, assigned_to,
-                assigned_by, priority, status, deadline,
-                start_date, start_time, frequency
+                assigned_by, priority, status, deadline
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             task_id, title, description, assigned_to,
-            assigned_by, priority, status, deadline,
-            start_date, start_time, frequency
+            assigned_by, priority, status, deadline
         ))
 
         # Handle audio note
         if audio_note:
             try:
-                logger.info(f"Processing audio note for task update: {task_id}")
+                logger.info(f"Processing audio note for task: {task_id}")
                 logger.debug(f"Audio note data: {audio_note}")
-                
+
                 file_id = audio_note.get('file_id')
                 audio_data = audio_note.get('audio_data')
                 duration = audio_note.get('duration', 0)
                 file_name = audio_note.get('filename', 'voice_note.wav')
                 created_by = data.get('updated_by', assigned_by)
-                
+
                 logger.info(f"Audio note details - file_id: {file_id}, data length: {'Yes' if audio_data else 'No'}, duration: {duration}, filename: {file_name}")
-                
-                # Ensure file extension is .wav
+
                 if not file_name.lower().endswith('.wav'):
                     name_parts = file_name.rsplit('.', 1)
                     file_name = name_parts[0] + '.wav'
                     logger.info(f"Changed audio file extension to .wav: {file_name}")
-                
-                # Check if we have a file_id from a previous upload
+
                 if file_id:
-                    # Use the existing file_id as audio_id
                     audio_id = file_id
-                    # The file should already be at this location from the upload endpoint
                     audio_path = os.path.join('uploads', 'audio', f"{audio_id}_{file_name}")
                     logger.info(f"Using pre-uploaded audio file with ID: {file_id}, path: {audio_path}")
-                    
-                    # Insert audio note record
+
                     cursor.execute("""
                         INSERT INTO task_audio_notes (
                             audio_id, task_id, file_path, duration, 
@@ -1217,18 +1632,16 @@ def create_task():
                         file_name, created_by, 'normal'
                     ))
                     logger.info(f"Added audio note with existing file_id: {audio_id}")
-                
+
                 elif audio_data:
-                    # Save audio file
                     audio_id = str(uuid.uuid4())
                     audio_path = os.path.join(AUDIO_FOLDER, f"{audio_id}_{file_name}")
                     logger.info(f"Saving direct audio data with new ID: {audio_id}, path: {audio_path}")
-                    
+
                     os.makedirs(AUDIO_FOLDER, exist_ok=True)
                     with open(audio_path, 'wb') as f:
                         f.write(base64.b64decode(audio_data))
-                    
-                    # Insert audio note record
+
                     cursor.execute("""
                         INSERT INTO task_audio_notes (
                             audio_id, task_id, file_path, duration, 
@@ -1249,29 +1662,24 @@ def create_task():
 
         # Handle attachments
         if attachments:
-            logger.info(f"Processing {len(attachments)} attachments for new task: {task_id}")
+            logger.info(f"Processing {len(attachments)} attachments for task: {task_id}")
             for i, attachment in enumerate(attachments):
                 try:
                     logger.info(f"Processing attachment {i+1}/{len(attachments)}")
                     logger.debug(f"Attachment data: {attachment}")
-                    
+
                     file_id = attachment.get('file_id')
                     file_data = attachment.get('file_data')
                     file_name = attachment.get('file_name')
                     file_type = attachment.get('file_type')
-                    
+
                     logger.info(f"Attachment info - file_id: {file_id}, has_data: {'Yes' if file_data else 'No'}, name: {file_name}, type: {file_type}")
-                    
-                    # Use existing file_id if provided (from previous upload)
+
                     if file_id and file_name:
-                        # Use the file_id as attachment_id
                         attachment_id = file_id
-                        
-                        # Get the file path based on the upload endpoint pattern
-                        attachment_path = os.path.join('uploads', 'attachments', f"{attachment_id}_{file_name}")
+                        attachment_path = os.path.join('Uploads', 'attachments', f"{attachment_id}_{file_name}")
                         logger.info(f"Using pre-uploaded attachment file with ID: {file_id}, path: {attachment_path}")
-                        
-                        # Insert attachment record
+
                         cursor.execute("""
                             INSERT INTO task_attachments (
                                 attachment_id, task_id, file_name,
@@ -1285,28 +1693,23 @@ def create_task():
                             file_name,
                             attachment_path,
                             file_type,
-                            0,  # File size unknown but not critical
+                            0,
                             assigned_by
                         ))
                         logger.info(f"Added attachment with existing file_id: {attachment_id}")
-                    
-                    # Handle direct file data if provided instead
+
                     elif file_data and file_name:
-                        # Generate a new UUID for this attachment
                         attachment_id = str(uuid.uuid4())
                         logger.info(f"Creating new attachment with ID: {attachment_id} for file: {file_name}")
-                        
-                        # Save attachment file
+
                         attachment_path = os.path.join(ATTACHMENTS_FOLDER, f"{attachment_id}_{file_name}")
                         os.makedirs(ATTACHMENTS_FOLDER, exist_ok=True)
                         with open(attachment_path, 'wb') as f:
                             f.write(base64.b64decode(file_data))
-                        
-                        # Get file size
+
                         file_size = os.path.getsize(attachment_path)
                         logger.info(f"Saved attachment file, size: {file_size} bytes")
-                        
-                        # Insert attachment record
+
                         cursor.execute("""
                             INSERT INTO task_attachments (
                                 attachment_id, task_id, file_name,
@@ -1335,171 +1738,115 @@ def create_task():
         if alarm_settings:
             try:
                 logger.info(f"Processing alarm settings: {alarm_settings}")
-                
+
                 # Validate required fields
                 required_fields = ['start_date', 'start_time', 'frequency']
                 missing_fields = [field for field in required_fields if field not in alarm_settings]
                 if missing_fields:
                     logger.error(f"Missing required alarm fields: {missing_fields}")
-                    raise ValueError(f"Missing required alarm fields: {missing_fields}")
-                
+                    return jsonify({
+                        'success': False,
+                        'message': f'Missing required alarm fields: {missing_fields}'
+                    }), 400
+
                 # Validate date format
                 try:
                     datetime.strptime(alarm_settings['start_date'], '%Y-%m-%d')
                 except ValueError:
                     logger.error(f"Invalid start_date format: {alarm_settings['start_date']}")
-                    raise ValueError("Invalid start_date format. Expected YYYY-MM-DD")
-                
-                # Validate time format
+                    return jsonify({
+                        'success': False,
+                        'message': 'Invalid start_date format. Expected YYYY-MM-DD'
+                    }), 400
+
+                # Validate time format (accept HH:MM or HH:MM:SS)
+                start_time = alarm_settings['start_time']
                 try:
-                    datetime.strptime(alarm_settings['start_time'], '%H:%M:%S')
+                    if len(start_time.split(':')) == 2:  # HH:MM
+                        start_time = f"{start_time}:00"
+                        alarm_settings['start_time'] = start_time
+                    datetime.strptime(start_time, '%H:%M:%S')
                 except ValueError:
-                    logger.error(f"Invalid start_time format: {alarm_settings['start_time']}")
-                    raise ValueError("Invalid start_time format. Expected HH:MM:SS")
-                
+                    logger.error(f"Invalid start_time format: {start_time}")
+                    return jsonify({
+                        'success': False,
+                        'message': 'Invalid start_time format. Expected HH:MM or HH:MM:SS'
+                    }), 400
+
                 # Validate frequency
                 valid_frequencies = ['30 minutes', '1 hour', '2 hours', '4 hours', '6 hours', '8 hours']
                 if alarm_settings['frequency'] not in valid_frequencies:
                     logger.error(f"Invalid frequency: {alarm_settings['frequency']}")
-                    raise ValueError(f"Invalid frequency. Must be one of: {valid_frequencies}")
-                
+                    return jsonify({
+                        'success': False,
+                        'message': f'Invalid frequency. Must be one of: {valid_frequencies}'
+                    }), 400
+
+                # Get alarm_id from frontend or generate new
+                alarm_id = alarm_settings.get('alarm_id', str(uuid.uuid4()))
+                if not is_valid_uuid(alarm_id):
+                    logger.error(f"Invalid alarm_id format: {alarm_id}")
+                    return jsonify({
+                        'success': False,
+                        'message': 'Invalid alarm_id format'
+                    }), 400
+
                 # Calculate next trigger time in UTC
-                start_datetime_str = f"{alarm_settings['start_date']} {alarm_settings['start_time']}"
+                start_datetime_str = f"{alarm_settings['start_date']} {start_time}"
                 start_datetime = convert_to_utc(start_datetime_str)
-                
+
                 logger.info(f"Original start datetime (IST): {start_datetime_str}")
                 logger.info(f"Converted to UTC: {start_datetime}")
-                
-                # Generate alarm ID and insert
-                alarm_id = str(uuid.uuid4())
-                # Look up user_id for assigned_to
-                cursor.execute("SELECT user_id FROM users WHERE username = %s", (assigned_to,))
-                user_row = cursor.fetchone()
-                user_id = user_row['user_id'] if user_row else None
-                if not user_id:
-                    logger.error(f"Could not find user_id for assigned_to: {assigned_to}")
-                    raise ValueError(f"Could not find user_id for assigned_to: {assigned_to}")
+                logger.info(f"Alarm ID: {alarm_id}, User ID: {user_id}")
+
+                # Insert alarm
                 cursor.execute("""
                     INSERT INTO task_alarms (
                         alarm_id, task_id, start_date, start_time,
                         frequency, created_by, is_active, next_trigger, user_id
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, TRUE, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     alarm_id,
                     task_id,
                     alarm_settings['start_date'],
-                    alarm_settings['start_time'],
+                    start_time,
                     alarm_settings['frequency'],
                     assigned_by,
+                    True,
                     start_datetime,
                     user_id
                 ))
-                logger.info(f"Successfully created alarm with ID: {alarm_id} and user_id: {user_id}")
+                logger.info(f"Created alarm with ID: {alarm_id} for task: {task_id}")
             except Exception as e:
                 logger.error(f"Error creating alarm: {str(e)}")
+                logger.exception("Alarm error details:")
                 raise
 
         conn.commit()
-        
-        # Notify about task creation
-        try:
-            notify_task_update({
-                'task_id': task_id,
-                'title': title,
-                'description': description,
-                'assigned_to': assigned_to,
-                'assigned_by': assigned_by,
-                'priority': priority,
-                'status': status,
-                'deadline': deadline
-            }, 'task_created')
-        except Exception as e:
-            logger.error(f"Error sending task creation notification: {str(e)}")
 
-
-        # Send notification to assigned_to
-        try:
-            # Fetch assigned_to's FCM token and assigned_by's username
-            cursor.execute("""
-                SELECT u1.fcm_token, u2.username AS creator_name
-                FROM users u1, users u2
-                WHERE u1.username = %s AND u2.username = %s
-            """, (assigned_to, assigned_by))
-            result = cursor.fetchone()
-            
-            if not result or not result['fcm_token']:
-                logger.warning(f"No FCM token found for user_id: {assigned_to}")
-            else:
-                token = result['fcm_token']
-                creator_name = result['creator_name']
-                
-                # Truncate description for notification
-                truncated_description = description[:80] + "..." if len(description) > 80 else description
-                
-                # Construct notification message
-                notification_title = f"Task Created: {title}"
-                notification_body = (
-                    f"{creator_name} has created a new task: \"{title}\". "
-                    f"Description: {truncated_description}. "
-                    f"Status: {status.capitalize()}. "
-                    "Please review in the Task Management App."
-                )
-                
-                # Build FCM message
-                message = messaging.Message(
-                    notification=messaging.Notification(
-                        title=notification_title,
-                        body=notification_body
-                    ),
-                    token=token,
-                    data={
-                        'task_id': str(task_id),
-                        'priority': priority,
-                        'status': status,
-                        'deadline': deadline,
-                        'assigned_to': assigned_to,
-                        'assigned_by': assigned_by,
-                        'creator_name': creator_name
-                    },
-                    android=messaging.AndroidConfig(
-                        notification=messaging.AndroidNotification(
-                            # channel_id='high_importance_channel'
-                            channel_id='high_importance_channel'
-                        )
-                    )
-                )
-                
-                # Send notification
-                logger.info(f"Sending creation notification to user_id: {assigned_to}, token: {token[:10]}...")
-                response = messaging.send(message)
-                logger.info(f"Notification sent successfully: {response}")
-        
-        except Exception as e:
-            logger.error(f"Error sending task creation notification: {str(e)}")
-            # Continue execution even if notification fails
-
-        conn.commit()
-        
         return jsonify({
             'success': True,
             'message': 'Task created successfully',
             'task_id': task_id
         }), 201
-        
+
     except Exception as e:
         if conn:
             conn.rollback()
         logger.error(f"Error creating task: {str(e)}")
+        logger.exception("Task creation error details:")
         return jsonify({
             'success': False,
-            'message': f"Error creating task: {str(e)}"
+            'message': f'Error creating task: {str(e)}'
         }), 500
+
     finally:
         if cursor:
             cursor.close()
         if conn:
             conn.close()
+            logger.debug("Database connection closed")
 
 
 # ---------------- GET TASKS ----------------
