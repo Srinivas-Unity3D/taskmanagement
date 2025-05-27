@@ -578,7 +578,7 @@ def send_alarm_notification(alarm):
         # Prepare FCM message
         data_payload = {
             "type": "set_alarm",
-            "task_id": "task_id",
+            "task_id": task_id,
             "alarm_id": alarm_id,
             "title": task_title,
             "assigned_by": assigned_by,
