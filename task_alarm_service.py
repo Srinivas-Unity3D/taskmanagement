@@ -210,6 +210,58 @@ def get_pending_alarms():
 
 
 
+# def calculate_next_trigger_time(alarm):
+#     """Calculate the next trigger time based on frequency"""
+#     try:
+#         if not alarm['last_triggered']:
+#             # If never triggered, use start date and time
+#             start_date = alarm['start_date']
+#             start_time = alarm['start_time']
+#             if isinstance(start_date, str):
+#                 start_date_str = start_date
+#             else:
+#                 start_date_str = start_date.strftime('%Y-%m-%d')
+#             if isinstance(start_time, str):
+#                 start_time_str = start_time
+#             else:
+#                 start_time_str = start_time.strftime('%H:%M:%S')
+#             start_datetime_str = f"{start_date_str} {start_time_str}"
+#             start_datetime = datetime.strptime(start_datetime_str, '%Y-%m-%d %H:%M:%S')
+#             logger.info(f"First trigger time calculated: {start_datetime}")
+#             return start_datetime
+#         # Convert last_triggered to datetime
+#         last_triggered = alarm['last_triggered']
+#         if isinstance(last_triggered, str):
+#             last_triggered_dt = datetime.strptime(
+#                 last_triggered, '%Y-%m-%d %H:%M:%S'
+#             )
+#         else:
+#             last_triggered_dt = last_triggered
+#         # Calculate next trigger time based on frequency
+#         frequency = alarm['frequency']
+#         logger.info(f"Calculating next trigger time for frequency: {frequency}")
+#         if frequency == '30 minutes':
+#             next_trigger = last_triggered_dt + timedelta(minutes=30)
+#         elif frequency == '1 hour':
+#             next_trigger = last_triggered_dt + timedelta(hours=1)
+#         elif frequency == '2 hours':
+#             next_trigger = last_triggered_dt + timedelta(hours=2)
+#         elif frequency == '4 hours':
+#             next_trigger = last_triggered_dt + timedelta(hours=4)
+#         elif frequency == '6 hours':
+#             next_trigger = last_triggered_dt + timedelta(hours=6)
+#         elif frequency == '8 hours':
+#             next_trigger = last_triggered_dt + timedelta(hours=8)
+#         else:
+#             # Default to 1 hour if frequency is not recognized
+#             logger.warning(f"Unrecognized frequency: {frequency}, defaulting to 1 hour")
+#             next_trigger = last_triggered_dt + timedelta(hours=1)
+#         logger.info(f"Next trigger time calculated: {next_trigger}")
+#         return next_trigger
+#     except Exception as e:
+#         logger.error(f"Error calculating next trigger time: {str(e)}")
+#         raise
+
 def calculate_next_trigger_time(alarm):
     """Calculate the next trigger time based on frequency"""
     try:
@@ -227,16 +279,17 @@ def calculate_next_trigger_time(alarm):
                 start_time_str = start_time.strftime('%H:%M:%S')
             start_datetime_str = f"{start_date_str} {start_time_str}"
             start_datetime = datetime.strptime(start_datetime_str, '%Y-%m-%d %H:%M:%S')
-            logger.info(f"First trigger time calculated: {start_datetime}")
+            # Ensure UTC
+            start_datetime = start_datetime.replace(tzinfo=timezone.utc)
+            logger.info(f"First trigger time (UTC): {start_datetime}")
             return start_datetime
         # Convert last_triggered to datetime
         last_triggered = alarm['last_triggered']
         if isinstance(last_triggered, str):
-            last_triggered_dt = datetime.strptime(
-                last_triggered, '%Y-%m-%d %H:%M:%S'
-            )
+            last_triggered_dt = datetime.strptime(last_triggered, '%Y-%m-%d %H:%M:%S')
+            last_triggered_dt = last_triggered_dt.replace(tzinfo=timezone.utc)
         else:
-            last_triggered_dt = last_triggered
+            last_triggered_dt = last_triggered.replace(tzinfo=timezone.utc)
         # Calculate next trigger time based on frequency
         frequency = alarm['frequency']
         logger.info(f"Calculating next trigger time for frequency: {frequency}")
@@ -253,10 +306,9 @@ def calculate_next_trigger_time(alarm):
         elif frequency == '8 hours':
             next_trigger = last_triggered_dt + timedelta(hours=8)
         else:
-            # Default to 1 hour if frequency is not recognized
             logger.warning(f"Unrecognized frequency: {frequency}, defaulting to 1 hour")
             next_trigger = last_triggered_dt + timedelta(hours=1)
-        logger.info(f"Next trigger time calculated: {next_trigger}")
+        logger.info(f"Next trigger time (UTC): {next_trigger}")
         return next_trigger
     except Exception as e:
         logger.error(f"Error calculating next trigger time: {str(e)}")
@@ -329,21 +381,187 @@ def update_alarm_status(alarm_id, last_triggered, next_trigger):
         return False
 
 
+# def send_alarm_notification(alarm):
+#     """Send FCM notification to user for the alarm using Firebase Admin SDK"""
+#     try:
+#         # Log the entire alarm dictionary
+#         logger.debug(f"Received alarm data: {alarm}")
+
+#         # Validate and fetch FCM token
+#         if not alarm.get('fcm_token'):
+#             logger.warning(f"No FCM token for alarm ID: {alarm.get('alarm_id', 'unknown')}, "
+#                           f"user ID: {alarm.get('user_id', 'unknown')}")
+#             # Fallback query for FCM token
+#             try:
+#                 conn = get_db_connection()
+#                 if not conn:
+#                     logger.error("Failed to establish database connection")
+#                     return False
+#                 cursor = conn.cursor(dictionary=True)
+#                 cursor.execute("""
+#                     SELECT u.fcm_token 
+#                     FROM users u
+#                     JOIN task_alarms a ON a.user_id = u.user_id
+#                     WHERE a.task_id = %s
+#                 """, (alarm.get('task_id', 'unknown'),))
+#                 result = cursor.fetchone()
+#                 logger.debug(f"FCM token query result: {result}")
+#                 cursor.close()
+#                 conn.close()
+#                 if result and result.get('fcm_token'):
+#                     logger.info(f"Found FCM token from fallback query: {result['fcm_token'][:10]}...")
+#                     alarm['fcm_token'] = result['fcm_token']
+#                 else:
+#                     logger.warning(f"No FCM token found in fallback query for task ID: {alarm.get('task_id', 'unknown')}")
+#                     return False
+#             except Exception as e:
+#                 logger.error(f"Error in FCM token fallback lookup: {e}")
+#                 return False
+
+#         if not alarm.get('fcm_token'):
+#             logger.error(f"Cannot send notification: No FCM token available for alarm ID: {alarm.get('alarm_id', 'unknown')}")
+#             return False
+
+#         logger.info(f"Preparing alarm notification for task: {alarm.get('task_id', 'unknown')} "
+#                    f"with FCM token: {alarm['fcm_token'][:10]}...")
+
+#         # Validate required fields with defaults
+#         task_id = str(alarm.get('task_id') or 'unknown_task')
+#         alarm_id = str(alarm.get('alarm_id') or f"alarm_{task_id}")
+#         task_title = str(alarm.get('task_title') or 'Untitled Task')
+#         task_description = str(alarm.get('task_description') or 'Time to check your task!')
+#         logger.debug(f"Task fields: task_id={task_id}, alarm_id={alarm_id}, task_title={task_title}, "
+#                     f"task_description={task_description}")
+
+#         # Get assigned_by
+#         assigned_by = alarm.get('assigned_by', 'Unknown')
+#         if not assigned_by or assigned_by == 'Unknown':
+#             try:
+#                 conn = get_db_connection()
+#                 if not conn:
+#                     logger.error("Failed to establish database connection for assigned_by query")
+#                 else:
+#                     cursor = conn.cursor(dictionary=True)
+#                     cursor.execute("""
+#                         SELECT assigned_by FROM tasks WHERE task_id = %s
+#                     """, (task_id,))
+#                     result = cursor.fetchone()
+#                     logger.debug(f"Assigned_by query result: {result}")
+#                     cursor.close()
+#                     conn.close()
+#                     assigned_by = str(result['assigned_by'] if result and result.get('assigned_by') else 'Unknown')
+#             except Exception as e:
+#                 logger.error(f"Error retrieving assigned_by for task ID {task_id}: {e}")
+#         logger.debug(f"Assigned by: {assigned_by}")
+
+#         # Format deadline
+#         deadline = alarm.get('formatted_deadline', '')
+#         if not deadline and alarm.get('deadline'):
+#             try:
+#                 if isinstance(alarm['deadline'], datetime):
+#                     deadline = alarm['deadline'].strftime('%Y-%m-%d')
+#                 else:
+#                     deadline = str(alarm['deadline'])
+#                 logger.debug(f"Formatted deadline: {deadline}")
+#             except Exception as e:
+#                 logger.error(f"Error formatting deadline: {e}")
+#                 deadline = ''
+#         logger.debug(f"Deadline: {deadline}")
+
+#         assignee_name = str(alarm.get('assigned_to', 'You'))
+#         logger.debug(f"Assignee name: {assignee_name}")
+
+#         # Get and validate trigger time
+#         trigger_time = alarm.get('next_trigger')
+#         logger.debug(f"Raw next_trigger: {trigger_time} (type: {type(trigger_time)})")
+
+#         if not trigger_time:
+#             logger.warning(f"No next_trigger for alarm ID: {alarm_id}, using current UTC time")
+#             trigger_time_dt = datetime.now(timezone.utc)
+#         else:
+#             try:
+#                 if isinstance(trigger_time, str):
+#                     trigger_time_dt = datetime.strptime(trigger_time, '%Y-%m-%d %H:%M:%S')
+#                     logger.debug(f"Parsed string next_trigger: {trigger_time_dt}")
+#                 else:
+#                     trigger_time_dt = trigger_time
+#                     logger.debug(f"Using next_trigger as datetime: {trigger_time_dt}")
+#                 # Ensure UTC timezone
+#                 if not trigger_time_dt.tzinfo:
+#                     trigger_time_dt = trigger_time_dt.replace(tzinfo=timezone.utc)
+#             except ValueError as e:
+#                 logger.error(f"Invalid next_trigger format for alarm ID {alarm_id}: {trigger_time}, error: {e}")
+#                 logger.warning(f"Using current UTC time as fallback")
+#                 trigger_time_dt = datetime.now(timezone.utc)
+
+#         trigger_time_iso = trigger_time_dt.isoformat()
+#         logger.debug(f"Final trigger_time_iso: {trigger_time_iso}")
+
+#         # Prepare FCM message
+#         data_payload = {
+#             "type": "set_alarm",
+#             "task_id": task_id,
+#             "alarm_id": alarm_id,
+#             "title": task_title,
+#             "assigned_by": assigned_by,
+#             "deadline": deadline,
+#             "assignee_name": assignee_name,
+#             "trigger_time": trigger_time_iso,
+#             "click_action": "FLUTTER_NOTIFICATION_CLICK"
+#         }
+#         logger.debug(f"FCM data payload: {data_payload}")
+
+#         try:
+#             message = messaging.Message(
+#                 notification=messaging.Notification(
+#                     title=f"Task Alarm: {task_title}",
+#                     body=task_description
+#                 ),
+#                 data=data_payload,
+#                 android=messaging.AndroidConfig(
+#                     priority='high',
+#                     notification=messaging.AndroidNotification(
+#                         sound='alarm',
+#                         channel_id='task_alarms',
+#                         priority='max',
+#                         visibility='public'
+#                     )
+#                 ),
+#                 apns=messaging.APNSConfig(
+#                     payload=messaging.APNSPayload(
+#                         aps=messaging.Aps(
+#                             sound='alarm.wav',
+#                             category='TASK_ALARM',
+#                             content_available=True,
+#                             mutable_content=True
+#                         )
+#                     ),
+#                     headers={'apns-priority': '10'}
+#                 ),
+#                 token=alarm['fcm_token']
+#             )
+
+#             logger.debug("Sending FCM message")
+#             response = messaging.send(message)
+#             logger.info(f"Successfully sent alarm notification for alarm ID: {alarm_id}, response: {response}")
+#             return True
+#         except Exception as e:
+#             logger.error(f"Error sending notification with Firebase Admin SDK for alarm ID: {alarm_id}: {e}")
+#             return False
+
+#     except Exception as e:
+#         logger.error(f"Unexpected error sending alarm notification for alarm ID: {alarm.get('alarm_id', 'unknown')}: {e}")
+#         return False
+
 def send_alarm_notification(alarm):
     """Send FCM notification to user for the alarm using Firebase Admin SDK"""
     try:
-        # Log the entire alarm dictionary
         logger.debug(f"Received alarm data: {alarm}")
-
-        # Validate and fetch FCM token
         if not alarm.get('fcm_token'):
-            logger.warning(f"No FCM token for alarm ID: {alarm.get('alarm_id', 'unknown')}, "
-                          f"user ID: {alarm.get('user_id', 'unknown')}")
-            # Fallback query for FCM token
+            logger.warning(f"No FCM token for alarm ID: {alarm.get('alarm_id', 'unknown')}")
             try:
                 conn = get_db_connection()
                 if not conn:
-                    logger.error("Failed to establish database connection")
                     return False
                 cursor = conn.cursor(dictionary=True)
                 cursor.execute("""
@@ -353,56 +571,66 @@ def send_alarm_notification(alarm):
                     WHERE a.task_id = %s
                 """, (alarm.get('task_id', 'unknown'),))
                 result = cursor.fetchone()
-                logger.debug(f"FCM token query result: {result}")
                 cursor.close()
                 conn.close()
                 if result and result.get('fcm_token'):
-                    logger.info(f"Found FCM token from fallback query: {result['fcm_token'][:10]}...")
                     alarm['fcm_token'] = result['fcm_token']
                 else:
-                    logger.warning(f"No FCM token found in fallback query for task ID: {alarm.get('task_id', 'unknown')}")
                     return False
             except Exception as e:
                 logger.error(f"Error in FCM token fallback lookup: {e}")
                 return False
 
-        if not alarm.get('fcm_token'):
-            logger.error(f"Cannot send notification: No FCM token available for alarm ID: {alarm.get('alarm_id', 'unknown')}")
-            return False
-
-        logger.info(f"Preparing alarm notification for task: {alarm.get('task_id', 'unknown')} "
-                   f"with FCM token: {alarm['fcm_token'][:10]}...")
-
-        # Validate required fields with defaults
         task_id = str(alarm.get('task_id') or 'unknown_task')
         alarm_id = str(alarm.get('alarm_id') or f"alarm_{task_id}")
         task_title = str(alarm.get('task_title') or 'Untitled Task')
         task_description = str(alarm.get('task_description') or 'Time to check your task!')
-        logger.debug(f"Task fields: task_id={task_id}, alarm_id={alarm_id}, task_title={task_title}, "
-                    f"task_description={task_description}")
 
-        # Get assigned_by
+        # Get trigger time
+        trigger_time = alarm.get('next_trigger')
+        logger.info(f"Raw next_trigger (UTC): {trigger_time} (type: {type(trigger_time)})")
+
+        if not trigger_time:
+            logger.warning(f"No next_trigger, using current UTC time")
+            trigger_time_dt = datetime.now(timezone.utc)
+        else:
+            try:
+                if isinstance(trigger_time, str):
+                    trigger_time_dt = datetime.strptime(trigger_time, '%Y-%m-%d %H:%M:%S')
+                    trigger_time_dt = trigger_time_dt.replace(tzinfo=timezone.utc)
+                else:
+                    trigger_time_dt = trigger_time
+                    if not trigger_time_dt.tzinfo:
+                        trigger_time_dt = trigger_time_dt.replace(tzinfo=timezone.utc)
+                # Validate trigger time is not in the past
+                now = datetime.now(timezone.utc)
+                if trigger_time_dt < now:
+                    logger.warning(f"Trigger time {trigger_time_dt} is in the past, adjusting to now")
+                    trigger_time_dt = now
+            except ValueError as e:
+                logger.error(f"Invalid next_trigger format: {trigger_time}, error: {e}")
+                trigger_time_dt = datetime.now(timezone.utc)
+
+        trigger_time_iso = trigger_time_dt.isoformat()
+        logger.info(f"Sending trigger_time: {trigger_time_iso}")
+
+        # Other fields
         assigned_by = alarm.get('assigned_by', 'Unknown')
         if not assigned_by or assigned_by == 'Unknown':
             try:
                 conn = get_db_connection()
-                if not conn:
-                    logger.error("Failed to establish database connection for assigned_by query")
-                else:
+                if conn:
                     cursor = conn.cursor(dictionary=True)
                     cursor.execute("""
                         SELECT assigned_by FROM tasks WHERE task_id = %s
                     """, (task_id,))
                     result = cursor.fetchone()
-                    logger.debug(f"Assigned_by query result: {result}")
                     cursor.close()
                     conn.close()
-                    assigned_by = str(result['assigned_by'] if result and result.get('assigned_by') else 'Unknown')
-            except Exception as e:
-                logger.error(f"Error retrieving assigned_by for task ID {task_id}: {e}")
-        logger.debug(f"Assigned by: {assigned_by}")
+                    assigned_by = str(result['assigned_by'] if result else 'Unknown')
+            except Exception:
+                pass
 
-        # Format deadline
         deadline = alarm.get('formatted_deadline', '')
         if not deadline and alarm.get('deadline'):
             try:
@@ -410,42 +638,10 @@ def send_alarm_notification(alarm):
                     deadline = alarm['deadline'].strftime('%Y-%m-%d')
                 else:
                     deadline = str(alarm['deadline'])
-                logger.debug(f"Formatted deadline: {deadline}")
-            except Exception as e:
-                logger.error(f"Error formatting deadline: {e}")
+            except:
                 deadline = ''
-        logger.debug(f"Deadline: {deadline}")
-
         assignee_name = str(alarm.get('assigned_to', 'You'))
-        logger.debug(f"Assignee name: {assignee_name}")
 
-        # Get and validate trigger time
-        trigger_time = alarm.get('next_trigger')
-        logger.debug(f"Raw next_trigger: {trigger_time} (type: {type(trigger_time)})")
-
-        if not trigger_time:
-            logger.warning(f"No next_trigger for alarm ID: {alarm_id}, using current UTC time")
-            trigger_time_dt = datetime.now(timezone.utc)
-        else:
-            try:
-                if isinstance(trigger_time, str):
-                    trigger_time_dt = datetime.strptime(trigger_time, '%Y-%m-%d %H:%M:%S')
-                    logger.debug(f"Parsed string next_trigger: {trigger_time_dt}")
-                else:
-                    trigger_time_dt = trigger_time
-                    logger.debug(f"Using next_trigger as datetime: {trigger_time_dt}")
-                # Ensure UTC timezone
-                if not trigger_time_dt.tzinfo:
-                    trigger_time_dt = trigger_time_dt.replace(tzinfo=timezone.utc)
-            except ValueError as e:
-                logger.error(f"Invalid next_trigger format for alarm ID {alarm_id}: {trigger_time}, error: {e}")
-                logger.warning(f"Using current UTC time as fallback")
-                trigger_time_dt = datetime.now(timezone.utc)
-
-        trigger_time_iso = trigger_time_dt.isoformat()
-        logger.debug(f"Final trigger_time_iso: {trigger_time_iso}")
-
-        # Prepare FCM message
         data_payload = {
             "type": "set_alarm",
             "task_id": task_id,
@@ -457,49 +653,43 @@ def send_alarm_notification(alarm):
             "trigger_time": trigger_time_iso,
             "click_action": "FLUTTER_NOTIFICATION_CLICK"
         }
-        logger.debug(f"FCM data payload: {data_payload}")
 
-        try:
-            message = messaging.Message(
-                notification=messaging.Notification(
-                    title=f"Task Alarm: {task_title}",
-                    body=task_description
-                ),
-                data=data_payload,
-                android=messaging.AndroidConfig(
-                    priority='high',
-                    notification=messaging.AndroidNotification(
-                        sound='alarm',
-                        channel_id='task_alarms',
-                        priority='max',
-                        visibility='public'
+        message = messaging.Message(
+            notification=messaging.Notification(
+                title=f"Task Alarm: {task_title}",
+                body=task_description
+            ),
+            data=data_payload,
+            android=messaging.AndroidConfig(
+                priority='high',
+                notification=messaging.AndroidNotification(
+                    sound='alarm',
+                    channel_id='task_alarms',
+                    priority='max',
+                    visibility='public'
+                )
+            ),
+            apns=messaging.APNSConfig(
+                payload=messaging.APNSPayload(
+                    aps=messaging.Aps(
+                        sound='alarm.wav',
+                        category='TASK_ALARM',
+                        content_available=True,
+                        mutable_content=True
                     )
                 ),
-                apns=messaging.APNSConfig(
-                    payload=messaging.APNSPayload(
-                        aps=messaging.Aps(
-                            sound='alarm.wav',
-                            category='TASK_ALARM',
-                            content_available=True,
-                            mutable_content=True
-                        )
-                    ),
-                    headers={'apns-priority': '10'}
-                ),
-                token=alarm['fcm_token']
-            )
+                headers={'apns-priority': '10'}
+            ),
+            token=alarm['fcm_token']
+        )
 
-            logger.debug("Sending FCM message")
-            response = messaging.send(message)
-            logger.info(f"Successfully sent alarm notification for alarm ID: {alarm_id}, response: {response}")
-            return True
-        except Exception as e:
-            logger.error(f"Error sending notification with Firebase Admin SDK for alarm ID: {alarm_id}: {e}")
-            return False
-
+        response = messaging.send(message)
+        logger.info(f"Successfully sent alarm notification for alarm ID: {alarm_id}, trigger_time: {trigger_time_iso}")
+        return True
     except Exception as e:
-        logger.error(f"Unexpected error sending alarm notification for alarm ID: {alarm.get('alarm_id', 'unknown')}: {e}")
+        logger.error(f"Error sending notification for alarm ID: {alarm.get('alarm_id', 'unknown')}: {e}")
         return False
+
 
 def process_pending_alarms():
     """Process all pending alarms that should be triggered now"""
