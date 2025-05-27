@@ -1172,7 +1172,7 @@ def create_task():
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
-            task_id, title, description, assigned_to,
+            task_id, "check title", description, assigned_to,
             assigned_by, priority, status, deadline,
             start_date, start_time, frequency
         ))
