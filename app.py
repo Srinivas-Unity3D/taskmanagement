@@ -1329,7 +1329,7 @@ def create_task():
                     logger.exception("Attachment error details:")
                     continue
 
-        alarm_id = None  # Define alarm_id for use in notification
+        alarm_id = None
         if alarm_settings:
             try:
                 logger.info(f"Processing alarm settings: {alarm_settings}")
@@ -1433,22 +1433,22 @@ def create_task():
                 
                 data_payload = {
                     'task_id': str(task_id),
-                    'priority': priority,
-                    'status': status,
-                    'deadline': deadline,
-                    'assigned_to': assigned_to,
-                    'assigned_by': assigned_by,
-                    'creator_name': creator_name,
+                    'priority': str(priority),
+                    'status': str(status),
+                    'deadline': str(deadline),
+                    'assigned_to': str(assigned_to),
+                    'assigned_by': str(assigned_by),
+                    'creator_name': str(creator_name),
                     'type': 'task_created'
                 }
                 
                 if alarm_settings and alarm_id:
-                    data_payload['alarm_settings'] = {
+                    data_payload['alarm_settings'] = json.dumps({
                         'alarm_id': alarm_id,
                         'start_date': alarm_settings['start_date'],
                         'start_time': alarm_settings['start_time'],
                         'frequency': alarm_settings['frequency']
-                    }
+                    })
                 
                 message = messaging.Message(
                     notification=messaging.Notification(
@@ -1470,6 +1470,7 @@ def create_task():
         
         except Exception as e:
             logger.error(f"Error sending task creation notification: {str(e)}")
+            raise
 
         conn.commit()
         
