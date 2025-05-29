@@ -1407,6 +1407,67 @@ def create_task():
         except Exception as e:
             logger.error(f"Error sending task creation notification: {str(e)}")
 
+        # try:
+        #     cursor.execute("""
+        #         SELECT u1.fcm_token, u2.username AS creator_name
+        #         FROM users u1, users u2
+        #         WHERE u1.username = %s AND u2.username = %s
+        #     """, (assigned_to, assigned_by))
+        #     result = cursor.fetchone()
+            
+        #     if not result or not result['fcm_token']:
+        #         logger.warning(f"No FCM token found for user_id: {assigned_to}")
+        #     else:
+        #         token = result['fcm_token']
+        #         creator_name = result['creator_name']
+                
+        #         truncated_description = description[:80] + "..." if len(description) > 80 else description
+                
+        #         notification_title = f"Task Created: {title}"
+        #         notification_body = (
+        #             f"{creator_name} has created a new task: \"{title}\". "
+        #             f"Description: {truncated_description}. "
+        #             f"Status: {status.capitalize()}. "
+        #             "Please review in the Task Management App."
+        #         )
+                
+        #         data_payload = {
+        #             'task_id': str(task_id),
+        #             'priority': str(priority),
+        #             'status': str(status),
+        #             'deadline': str(deadline),
+        #             'assigned_to': str(assigned_to),
+        #             'assigned_by': str(assigned_by),
+        #             'creator_name': str(creator_name),
+        #             'type': 'task_created'
+        #         }
+                
+        #         if alarm_settings and alarm_id:
+        #             data_payload['alarm_settings'] = json.dumps({
+        #                 'alarm_id': alarm_id,
+        #                 'start_date': alarm_settings['start_date'],
+        #                 'start_time': alarm_settings['start_time'],
+        #                 'frequency': alarm_settings['frequency']
+        #             })
+                
+        #         message = messaging.Message(
+        #             notification=messaging.Notification(
+        #                 title=notification_title,
+        #                 body=notification_body
+        #             ),
+        #             token=token,
+        #             data=data_payload,
+        #             android=messaging.AndroidConfig(
+        #                 notification=messaging.AndroidNotification(
+        #                     channel_id='high_importance_channel'
+        #                 )
+        #             )
+        #         )
+                
+        #         logger.info(f"Sending creation notification to user_id: {assigned_to}, token: {token[:10]}...")
+        #         response = messaging.send(message)
+        #         logger.info(f"Notification sent successfully: {response}")
+
         try:
             cursor.execute("""
                 SELECT u1.fcm_token, u2.username AS creator_name
@@ -1423,23 +1484,17 @@ def create_task():
                 
                 truncated_description = description[:80] + "..." if len(description) > 80 else description
                 
-                notification_title = f"Task Created: {title}"
-                notification_body = (
-                    f"{creator_name} has created a new task: \"{title}\". "
-                    f"Description: {truncated_description}. "
-                    f"Status: {status.capitalize()}. "
-                    "Please review in the Task Management App."
-                )
-                
                 data_payload = {
                     'task_id': str(task_id),
+                    'type': 'task_created',
+                    'title': title,
+                    'description': truncated_description,
+                    'creator_name': creator_name,
                     'priority': str(priority),
                     'status': str(status),
                     'deadline': str(deadline),
                     'assigned_to': str(assigned_to),
-                    'assigned_by': str(assigned_by),
-                    'creator_name': str(creator_name),
-                    'type': 'task_created'
+                    'assigned_by': str(assigned_by)
                 }
                 
                 if alarm_settings and alarm_id:
@@ -1451,15 +1506,20 @@ def create_task():
                     })
                 
                 message = messaging.Message(
-                    notification=messaging.Notification(
-                        title=notification_title,
-                        body=notification_body
-                    ),
-                    token=token,
                     data=data_payload,
+                    token=token,
                     android=messaging.AndroidConfig(
-                        notification=messaging.AndroidNotification(
-                            channel_id='high_importance_channel'
+                        priority='high'
+                    ),
+                    apns=messaging.APNSConfig(
+                        headers={
+                            'apns-priority': '10',
+                            'apns-push-type': 'background'
+                        },
+                        payload=messaging.APNSPayload(
+                            aps=messaging.Aps(
+                                content_available=True
+                            )
                         )
                     )
                 )
