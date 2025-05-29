@@ -1529,7 +1529,7 @@ def create_task():
                     data=data_payload,
                     android=messaging.AndroidConfig(
                         notification=messaging.AndroidNotification(
-                            channel_id='high_importance_channel'
+                            channel_id='task_alarms'
                         )
                     )
                 )
