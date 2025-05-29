@@ -1505,21 +1505,31 @@ def create_task():
                         'frequency': alarm_settings['frequency']
                     })
                 
+                # message = messaging.Message(
+                #     data=data_payload,
+                #     token=token,
+                #     android=messaging.AndroidConfig(
+                #         priority='high'
+                #     ),
+                #     apns=messaging.APNSConfig(
+                #         headers={
+                #             'apns-priority': '10',
+                #             'apns-push-type': 'background'
+                #         },
+                #         payload=messaging.APNSPayload(
+                #             aps=messaging.Aps(
+                #                 content_available=True
+                #             )
+                #         )
+                #     )
+                # )
+
                 message = messaging.Message(
-                    data=data_payload,
                     token=token,
+                    data=data_payload,
                     android=messaging.AndroidConfig(
-                        priority='high'
-                    ),
-                    apns=messaging.APNSConfig(
-                        headers={
-                            'apns-priority': '10',
-                            'apns-push-type': 'background'
-                        },
-                        payload=messaging.APNSPayload(
-                            aps=messaging.Aps(
-                                content_available=True
-                            )
+                        notification=messaging.AndroidNotification(
+                            channel_id='high_importance_channel'
                         )
                     )
                 )
