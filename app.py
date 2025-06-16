@@ -2259,6 +2259,7 @@ def get_task_assignments(user_id):
                 t.deadline as due_date,
                 t.priority,
                 t.status as current_task,
+                t.created_at, 
                 assigner.user_id as assigner_id,
                 assigner.username as assigner_name,
                 assigner.role as assigner_role,
@@ -2289,6 +2290,8 @@ def get_task_assignments(user_id):
         for assignment in assignments:
             if assignment['due_date']:
                 assignment['due_date'] = assignment['due_date'].isoformat()
+            if assignment['created_at']:
+                assignment['created_at'] = assignment['created_at'].isoformat()
 
         return jsonify({
             'success': True,
