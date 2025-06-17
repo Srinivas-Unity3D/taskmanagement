@@ -181,195 +181,195 @@ db_config = {
 }
 
 # Initialize database first
-def init_db():
-    try:
-        # First connect without database to create it if needed
-        temp_config = db_config.copy()
-        temp_config.pop('database', None)  # Remove database from config
-        conn = mysql.connector.connect(**temp_config)
-        cursor = conn.cursor()
+# def init_db():
+#     try:
+#         # First connect without database to create it if needed
+#         temp_config = db_config.copy()
+#         temp_config.pop('database', None)  # Remove database from config
+#         conn = mysql.connector.connect(**temp_config)
+#         cursor = conn.cursor()
 
-        # Create database if it doesn't exist
-        try:
-            cursor.execute(f"CREATE DATABASE IF NOT EXISTS {db_config['database']}")
-            conn.commit()
-        except mysql.connector.Error as e:
-            if e.errno == 1007:  # Database exists
-                logger.warning(f"Database already exists: {db_config['database']}")
-            else:
-                raise
+#         # Create database if it doesn't exist
+#         try:
+#             cursor.execute(f"CREATE DATABASE IF NOT EXISTS {db_config['database']}")
+#             conn.commit()
+#         except mysql.connector.Error as e:
+#             if e.errno == 1007:  # Database exists
+#                 logger.warning(f"Database already exists: {db_config['database']}")
+#             else:
+#                 raise
 
-        # Now connect to the specific database
-        conn = mysql.connector.connect(**db_config)
-        cursor = conn.cursor()
-        cursor.execute(f"USE {db_config['database']}")
+#         # Now connect to the specific database
+#         conn = mysql.connector.connect(**db_config)
+#         cursor = conn.cursor()
+#         cursor.execute(f"USE {db_config['database']}")
 
-        # Enable foreign key checks
-        cursor.execute("SET FOREIGN_KEY_CHECKS=0")
+#         # Enable foreign key checks
+#         cursor.execute("SET FOREIGN_KEY_CHECKS=0")
 
-        # Create tables if they don't exist
-        try:
-            # Create users table
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS users (
-                    user_id VARCHAR(36) PRIMARY KEY,
-                    username VARCHAR(100) UNIQUE NOT NULL,
-                    email VARCHAR(255) NOT NULL,
-                    phone VARCHAR(20) NOT NULL,
-                    password VARCHAR(255) NOT NULL,
-                    role VARCHAR(50) NOT NULL,
-                    fcm_token VARCHAR(255),
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    timezone VARCHAR(50)
-                )
-            """)
+#         # Create tables if they don't exist
+#         try:
+#             # Create users table
+#             cursor.execute("""
+#                 CREATE TABLE IF NOT EXISTS users (
+#                     user_id VARCHAR(36) PRIMARY KEY,
+#                     username VARCHAR(100) UNIQUE NOT NULL,
+#                     email VARCHAR(255) NOT NULL,
+#                     phone VARCHAR(20) NOT NULL,
+#                     password VARCHAR(255) NOT NULL,
+#                     role VARCHAR(50) NOT NULL,
+#                     fcm_token VARCHAR(255),
+#                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+#                     timezone VARCHAR(50)
+#                 )
+#             """)
 
-            # Create user_tokens table for JWT token storage
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS user_tokens (
-                    id VARCHAR(36) PRIMARY KEY,
-                    user_id VARCHAR(36) NOT NULL,
-                    access_token TEXT NOT NULL,
-                    refresh_token TEXT NOT NULL,
-                    access_token_expires_at TIMESTAMP NOT NULL,
-                    refresh_token_expires_at TIMESTAMP NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    is_revoked BOOLEAN DEFAULT FALSE,
-                    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
-                    INDEX idx_user_tokens (user_id, is_revoked)
-                )
-            """)
+#             # Create user_tokens table for JWT token storage
+#             cursor.execute("""
+#                 CREATE TABLE IF NOT EXISTS user_tokens (
+#                     id VARCHAR(36) PRIMARY KEY,
+#                     user_id VARCHAR(36) NOT NULL,
+#                     access_token TEXT NOT NULL,
+#                     refresh_token TEXT NOT NULL,
+#                     access_token_expires_at TIMESTAMP NOT NULL,
+#                     refresh_token_expires_at TIMESTAMP NOT NULL,
+#                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+#                     is_revoked BOOLEAN DEFAULT FALSE,
+#                     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+#                     INDEX idx_user_tokens (user_id, is_revoked)
+#                 )
+#             """)
 
-            # Create tasks table
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS tasks (
-                    task_id VARCHAR(36) PRIMARY KEY,
-                    title VARCHAR(255) NOT NULL,
-                    description TEXT,
-                    assigned_by VARCHAR(100) NOT NULL,
-                    assigned_to VARCHAR(100) NOT NULL,
-                    deadline DATETIME NOT NULL,
-                    priority ENUM('low', 'medium', 'high', 'urgent') NOT NULL,
-                    status ENUM('pending', 'in_progress', 'completed', 'snoozed') NOT NULL DEFAULT 'pending',
-                    start_date DATE,
-                    start_time TIME,
-                    frequency VARCHAR(50),
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                    FOREIGN KEY (assigned_by) REFERENCES users(username) ON DELETE CASCADE ON UPDATE CASCADE,
-                    FOREIGN KEY (assigned_to) REFERENCES users(username) ON DELETE CASCADE ON UPDATE CASCADE
-                )
-            """)
+#             # Create tasks table
+#             cursor.execute("""
+#                 CREATE TABLE IF NOT EXISTS tasks (
+#                     task_id VARCHAR(36) PRIMARY KEY,
+#                     title VARCHAR(255) NOT NULL,
+#                     description TEXT,
+#                     assigned_by VARCHAR(100) NOT NULL,
+#                     assigned_to VARCHAR(100) NOT NULL,
+#                     deadline DATETIME NOT NULL,
+#                     priority ENUM('low', 'medium', 'high', 'urgent') NOT NULL,
+#                     status ENUM('pending', 'in_progress', 'completed', 'snoozed') NOT NULL DEFAULT 'pending',
+#                     start_date DATE,
+#                     start_time TIME,
+#                     frequency VARCHAR(50),
+#                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+#                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+#                     FOREIGN KEY (assigned_by) REFERENCES users(username) ON DELETE CASCADE ON UPDATE CASCADE,
+#                     FOREIGN KEY (assigned_to) REFERENCES users(username) ON DELETE CASCADE ON UPDATE CASCADE
+#                 )
+#             """)
 
-            # Create task_audio_notes table
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS task_audio_notes (
-                    audio_id VARCHAR(36) PRIMARY KEY,
-                    task_id VARCHAR(36) NOT NULL,
-                    file_path VARCHAR(255) NOT NULL,
-                    file_name VARCHAR(255) NOT NULL DEFAULT 'voice_note.wav',
-                    duration INT,
-                    created_by VARCHAR(100),
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    note_type VARCHAR(20) NOT NULL DEFAULT 'normal',  -- 'normal' or 'snooze'
-                    FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE,
-                    FOREIGN KEY (created_by) REFERENCES users(username) ON DELETE SET NULL ON UPDATE CASCADE
-                )
-            """)
+#             # Create task_audio_notes table
+#             cursor.execute("""
+#                 CREATE TABLE IF NOT EXISTS task_audio_notes (
+#                     audio_id VARCHAR(36) PRIMARY KEY,
+#                     task_id VARCHAR(36) NOT NULL,
+#                     file_path VARCHAR(255) NOT NULL,
+#                     file_name VARCHAR(255) NOT NULL DEFAULT 'voice_note.wav',
+#                     duration INT,
+#                     created_by VARCHAR(100),
+#                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+#                     note_type VARCHAR(20) NOT NULL DEFAULT 'normal',  -- 'normal' or 'snooze'
+#                     FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE,
+#                     FOREIGN KEY (created_by) REFERENCES users(username) ON DELETE SET NULL ON UPDATE CASCADE
+#                 )
+#             """)
 
-            # Create task_notifications table
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS task_notifications (
-                    id VARCHAR(36) PRIMARY KEY,
-                    task_id VARCHAR(36) NOT NULL,
-                    title VARCHAR(255) NOT NULL,
-                    description TEXT,
-                    sender_name VARCHAR(100) NOT NULL,
-                    sender_role VARCHAR(50) NOT NULL,
-                    type VARCHAR(50) NOT NULL,
-                    is_read BOOLEAN DEFAULT FALSE,
-                    status VARCHAR(50) DEFAULT 'active',
-                    snooze_until DATETIME,
-                    snooze_reason TEXT,
-                    snooze_audio LONGTEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    target_user VARCHAR(100) NOT NULL,
-                    FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE ON UPDATE CASCADE,
-                    FOREIGN KEY (sender_name) REFERENCES users(username) ON DELETE CASCADE ON UPDATE CASCADE,
-                    FOREIGN KEY (target_user) REFERENCES users(username) ON DELETE CASCADE ON UPDATE CASCADE
-                )
-            """)
+#             # Create task_notifications table
+#             cursor.execute("""
+#                 CREATE TABLE IF NOT EXISTS task_notifications (
+#                     id VARCHAR(36) PRIMARY KEY,
+#                     task_id VARCHAR(36) NOT NULL,
+#                     title VARCHAR(255) NOT NULL,
+#                     description TEXT,
+#                     sender_name VARCHAR(100) NOT NULL,
+#                     sender_role VARCHAR(50) NOT NULL,
+#                     type VARCHAR(50) NOT NULL,
+#                     is_read BOOLEAN DEFAULT FALSE,
+#                     status VARCHAR(50) DEFAULT 'active',
+#                     snooze_until DATETIME,
+#                     snooze_reason TEXT,
+#                     snooze_audio LONGTEXT,
+#                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+#                     target_user VARCHAR(100) NOT NULL,
+#                     FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE ON UPDATE CASCADE,
+#                     FOREIGN KEY (sender_name) REFERENCES users(username) ON DELETE CASCADE ON UPDATE CASCADE,
+#                     FOREIGN KEY (target_user) REFERENCES users(username) ON DELETE CASCADE ON UPDATE CASCADE
+#                 )
+#             """)
 
-            # Create attachments table
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS task_attachments (
-                    attachment_id VARCHAR(36) PRIMARY KEY,
-                    task_id VARCHAR(36) NOT NULL,
-                    file_name VARCHAR(255) NOT NULL,
-                    file_type VARCHAR(50),
-                    file_size BIGINT,
-                    file_path VARCHAR(255) NOT NULL,
-                    created_by VARCHAR(100),
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE ON UPDATE CASCADE,
-                    FOREIGN KEY (created_by) REFERENCES users(username) ON DELETE SET NULL ON UPDATE CASCADE
-                )
-            """)
+#             # Create attachments table
+#             cursor.execute("""
+#                 CREATE TABLE IF NOT EXISTS task_attachments (
+#                     attachment_id VARCHAR(36) PRIMARY KEY,
+#                     task_id VARCHAR(36) NOT NULL,
+#                     file_name VARCHAR(255) NOT NULL,
+#                     file_type VARCHAR(50),
+#                     file_size BIGINT,
+#                     file_path VARCHAR(255) NOT NULL,
+#                     created_by VARCHAR(100),
+#                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+#                     FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE ON UPDATE CASCADE,
+#                     FOREIGN KEY (created_by) REFERENCES users(username) ON DELETE SET NULL ON UPDATE CASCADE
+#                 )
+#             """)
 
-            # Create task_alarms table
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS task_alarms (
-                    alarm_id VARCHAR(36) PRIMARY KEY,
-                    task_id VARCHAR(36) NOT NULL,
-                    user_id VARCHAR(36) NOT NULL,
-                    start_date DATE NOT NULL,
-                    start_time TIME NOT NULL,
-                    frequency VARCHAR(50) NOT NULL,
-                    is_active BOOLEAN DEFAULT TRUE,
-                    last_triggered TIMESTAMP NULL,
-                    next_trigger TIMESTAMP NOT NULL,
-                    acknowledged BOOLEAN DEFAULT FALSE,
-                    acknowledged_at TIMESTAMP NULL,
-                    created_by VARCHAR(100),
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                    FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE ON UPDATE CASCADE,
-                    FOREIGN KEY (created_by) REFERENCES users(username) ON DELETE SET NULL ON UPDATE CASCADE,
-                    INDEX idx_next_trigger (next_trigger, is_active),
-                    INDEX idx_task_id (task_id),
-                    INDEX idx_is_active (is_active)
-                )
-            """)
-        except mysql.connector.Error as e:
-            if e.errno == 1050:  # Table exists
-                logger.warning(f"Table already exists: {e.msg}")
-            else:
-                raise
+#             # Create task_alarms table
+#             cursor.execute("""
+#                 CREATE TABLE IF NOT EXISTS task_alarms (
+#                     alarm_id VARCHAR(36) PRIMARY KEY,
+#                     task_id VARCHAR(36) NOT NULL,
+#                     user_id VARCHAR(36) NOT NULL,
+#                     start_date DATE NOT NULL,
+#                     start_time TIME NOT NULL,
+#                     frequency VARCHAR(50) NOT NULL,
+#                     is_active BOOLEAN DEFAULT TRUE,
+#                     last_triggered TIMESTAMP NULL,
+#                     next_trigger TIMESTAMP NOT NULL,
+#                     acknowledged BOOLEAN DEFAULT FALSE,
+#                     acknowledged_at TIMESTAMP NULL,
+#                     created_by VARCHAR(100),
+#                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+#                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+#                     FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE ON UPDATE CASCADE,
+#                     FOREIGN KEY (created_by) REFERENCES users(username) ON DELETE SET NULL ON UPDATE CASCADE,
+#                     INDEX idx_next_trigger (next_trigger, is_active),
+#                     INDEX idx_task_id (task_id),
+#                     INDEX idx_is_active (is_active)
+#                 )
+#             """)
+#         except mysql.connector.Error as e:
+#             if e.errno == 1050:  # Table exists
+#                 logger.warning(f"Table already exists: {e.msg}")
+#             else:
+#                 raise
 
-        # Re-enable foreign key checks
-        cursor.execute("SET FOREIGN_KEY_CHECKS=1")
+#         # Re-enable foreign key checks
+#         cursor.execute("SET FOREIGN_KEY_CHECKS=1")
 
-        conn.commit()
-        logger.info("Database tables initialized successfully")
+#         conn.commit()
+#         logger.info("Database tables initialized successfully")
 
-    except Exception as e:
-        logger.error(f"Error initializing database: {str(e)}")
-        if 'conn' in locals():
-            conn.rollback()
-        raise
-    finally:
-        if 'cursor' in locals():
-            cursor.close()
-        if 'conn' in locals():
-            conn.close()
+#     except Exception as e:
+#         logger.error(f"Error initializing database: {str(e)}")
+#         if 'conn' in locals():
+#             conn.rollback()
+#         raise
+#     finally:
+#         if 'cursor' in locals():
+#             cursor.close()
+#         if 'conn' in locals():
+#             conn.close()
 
 # Now, after the function definition, call init_db()
-try:
-    init_db()
-    logger.info("Database initialized successfully")
-except Exception as e:
-    logger.error(f"Error initializing database: {str(e)}")
-    raise
+# try:
+#     init_db()
+#     logger.info("Database initialized successfully")
+# except Exception as e:
+#     logger.error(f"Error initializing database: {str(e)}")
+#     raise
 
 # Create connection pool after database initialization
 try:
@@ -804,7 +804,7 @@ def initialize_application():
     """Initialize the application and database"""
     try:
         # Initialize database tables
-        init_db()
+        # init_db()
         
         # Update tables with any new columns
         update_tasks_table()
@@ -1100,7 +1100,7 @@ def cleanup_expired_tokens():
 # Add token cleanup to the initialization
 def initialize_application():
     try:
-        init_db()
+        # init_db()
         # Start token cleanup thread
         def run_token_cleanup():
             while True:
